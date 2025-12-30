@@ -1,0 +1,3024 @@
+<?xml version="1.0" encoding="utf-8"?>
+<model version="NetLogo 7.0.3" snapToGrid="true">
+  <code><![CDATA[;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; COHERENCE vs ENTRAINMENT MODEL
+;; Illustrative agent-based dynamical sketch
+;; Recovery Tracking v2 + Fatigue Extension v1
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+globals [
+  perturbing?              ;; whether a perturbation is active
+  perturb-timer
+  max-variance
+  perturb-started?
+  last-perturb-strength
+  perturb-schedule
+
+  ;; Recovery tracking v2
+  stable-baseline          ;; rolling average before perturbation
+  baseline-window          ;; list for rolling calculation
+  perturb-end-tick         ;; when perturbation finished
+  peak-deviation           ;; max deviation from baseline during/after perturbation
+  recovery-complete?       ;; flag for clean recovery detection
+  last-recovery-time       ;; ticks from perturbation end to tolerance return
+
+  ;; Initial conditions tracking (I001)
+  initial-heading-variance ;; heading variance at tick 0 (before any dynamics)
+
+  ;; Agent parameter heterogeneity tracking (I002)
+  initial-coupling-bias-mean
+  initial-coupling-bias-variance
+  initial-inertia-mean
+  initial-inertia-variance
+
+  ;; Pre-perturbation state tracking (I002)
+  pre-perturbation-cost      ;; mean-cumulative-cost at tick 299
+  pre-perturbation-variance  ;; heading-variance at tick 299
+  pre-perturbation-captured? ;; flag to capture only once
+]
+
+turtles-own [
+  preferred-heading    ;; internal tendency (identity proxy)
+  coupling-bias        ;; individual sensitivity to alignment (0-1)
+  inertia              ;; heading update inertia (0–1)
+  tie-strength         ;; how influential this turtle is to others (0–1)
+
+  ;; Cost tracking (v1)
+  metabolic-cost       ;; accumulated regulatory cost
+  shock-cost           ;; accumulated perturbation cost
+  recovery-cost        ;; accumulated recovery cost
+  last-heading         ;; for computing heading-change
+
+  ;; Configuration tracking (I004)
+  initial-distance-from-mean  ;; angular distance from group mean at setup
+  alignment-work              ;; cumulative angular displacement toward social field
+]
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; SETUP
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to setup
+  clear-all
+  set max-variance 180
+  set perturbing? false
+  set perturb-timer 0
+  set perturb-started? false
+  set last-perturb-strength 0
+
+  ;; Recovery tracking v2 init
+  set baseline-window []
+  set stable-baseline 0
+  set perturb-end-tick 0
+  set peak-deviation 0
+  set recovery-complete? true
+  set last-recovery-time -1  ;; -1 means no recovery measured yet
+
+  create-turtles population [
+    setxy random-xcor random-ycor
+    set heading random 360
+    set preferred-heading heading
+
+    ;; Coupling-bias initialization (I003: controlled variance support)
+    ifelse controlled-variance? [
+      ;; For uniform on [a,b], variance = (b-a)²/12
+      ;; For target variance v: half-range = sqrt(3*v)
+      let half-range sqrt (3 * target-coupling-bias-variance)
+      let raw-value (0.5 - half-range) + random-float (2 * half-range)
+      ;; Clip to [0.01, 0.99] to avoid edge effects
+      set coupling-bias max list 0.01 (min list 0.99 raw-value)
+    ] [
+      set coupling-bias random-float 1
+    ]
+
+    set inertia (0.2 + random-float 0.8)
+    set tie-strength (0.2 + random-float 0.8)
+    set shape "agent-field"
+    set color scale-color blue coupling-bias 0 1
+    set size 1 + (2 * tie-strength)
+
+    ;; Initialize cost tracking
+    set metabolic-cost 0
+    set shock-cost 0
+    set recovery-cost 0
+    set last-heading heading
+
+    ;; Initialize I004 tracking
+    set alignment-work 0
+    set initial-distance-from-mean 0  ;; computed after all agents created
+  ]
+
+  ;; Compute initial-distance-from-mean (I004)
+  ;; Must happen after all agents exist so we can calculate group mean
+  let mean-heading mean-heading-of-turtles
+  ask turtles [
+    set initial-distance-from-mean abs subtract-headings heading mean-heading
+  ]
+
+  ;; Perturbation schedule
+  set perturb-schedule []
+
+  if perturbation-regime = "single" [
+    set perturb-schedule (list 300)
+  ]
+
+  if perturbation-regime = "periodic" [
+    set perturb-schedule n-values 10 [ i -> 300 + (i * 300) ]
+  ]
+
+  if perturbation-regime = "irregular" [
+    set perturb-schedule sort n-of 5 (range 200 2000)
+  ]
+
+  ;; --- plot initialisation ---
+  set-current-plot "Heading Variance Over Time"
+  clear-plot
+
+  ;; Capture initial conditions (I001)
+  set initial-heading-variance heading-variance
+
+  ;; Capture agent parameter heterogeneity (I002)
+  set initial-coupling-bias-mean mean [coupling-bias] of turtles
+  set initial-coupling-bias-variance variance [coupling-bias] of turtles
+  set initial-inertia-mean mean [inertia] of turtles
+  set initial-inertia-variance variance [inertia] of turtles
+
+  ;; Initialize pre-perturbation tracking (I002)
+  set pre-perturbation-cost 0
+  set pre-perturbation-variance 0
+  set pre-perturbation-captured? false
+
+  reset-ticks
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; MAIN LOOP
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to go
+  ;; --- Capture pre-perturbation state (I002) ---
+  ;; Capture at tick 299, just before first perturbation at tick 300
+  if ticks = 299 and not pre-perturbation-captured? [
+    set pre-perturbation-cost mean-cumulative-cost
+    set pre-perturbation-variance heading-variance
+    set pre-perturbation-captured? true
+  ]
+
+  ;; --- Update rolling baseline (only when stable: not perturbing and recovered) ---
+  if (not perturbing?) and recovery-complete? [
+    set baseline-window lput heading-variance baseline-window
+    ;; Keep window at 50 ticks max
+    if length baseline-window > 50 [
+      set baseline-window but-first baseline-window
+    ]
+    ;; Only compute baseline once we have enough samples
+    if length baseline-window >= 10 [
+      set stable-baseline mean baseline-window
+    ]
+  ]
+
+  ;; --- Apply ongoing perturbation ---
+  if perturbing? [
+    apply-perturbation
+  ]
+
+  ;; --- Scheduled perturbations ---
+  if member? ticks perturb-schedule [
+    perturb
+  ]
+
+  ;; --- Agent dynamics ---
+  ask turtles [
+    update-heading
+    apply-noise
+    move
+  ]
+
+  ;; --- Cost accumulation ---
+  ask turtles [
+    let heading-change abs subtract-headings heading last-heading
+
+    ;; Metabolic cost: always accruing (continuous regulatory effort)
+    set metabolic-cost metabolic-cost + (heading-change * metabolic-rate)
+
+    ;; Shock cost: only during active perturbation
+    if perturbing? [
+      set shock-cost shock-cost + (heading-change * shock-multiplier)
+    ]
+
+    ;; Recovery cost: during recovery period (after perturbation ends)
+    ;; Mechanism D: Fatigue slows recovery (increases recovery cost accumulation)
+    if (not recovery-complete?) and (not perturbing?) [
+      let recovery-rate-adjusted recovery-rate
+      if fatigue-enabled? [
+        let my-fatigue-level calculate-fatigue-level
+        ;; At max fatigue, recovery costs accumulate up to 2× faster
+        set recovery-rate-adjusted recovery-rate * (1 + fatigue-intensity * my-fatigue-level)
+      ]
+      set recovery-cost recovery-cost + (heading-change * recovery-rate-adjusted)
+    ]
+
+    ;; Update last-heading for next tick
+    set last-heading heading
+  ]
+
+  ;; --- Cost decay during stable periods ---
+  ;; Slow decay: costs decrease when system is stable (recovered and not perturbing)
+  if fatigue-enabled? and recovery-complete? and not perturbing? [
+    ask turtles [
+      set metabolic-cost metabolic-cost * (1 - cost-decay-rate)
+      set shock-cost shock-cost * (1 - cost-decay-rate)
+      set recovery-cost recovery-cost * (1 - cost-decay-rate)
+    ]
+  ]
+
+  ;; --- Track peak deviation during and after perturbation ---
+  if (not recovery-complete?) [
+    let current-deviation abs (heading-variance - stable-baseline)
+    if current-deviation > peak-deviation [
+      set peak-deviation current-deviation
+    ]
+  ]
+
+  ;; --- Recovery tracking v2 ---
+  ;; Recovery is measured from perturbation END to when variance returns within tolerance of stable baseline
+  if (not recovery-complete?) and (not perturbing?) [
+    let current-deviation abs (heading-variance - stable-baseline)
+
+    ;; Recovery complete when within tolerance band of stable baseline
+    if current-deviation <= recovery-tolerance [
+      set last-recovery-time (ticks - perturb-end-tick)
+      set recovery-complete? true
+    ]
+  ]
+
+  ;; --- Plotting ---
+  set-current-plot "Heading Variance Over Time"
+  set-current-plot-pen "variance"
+  plot heading-variance
+
+  set-current-plot-pen "perturb"
+  if perturb-started? [
+    plot-pen-reset
+    plotxy ticks 0
+    plotxy ticks ((last-perturb-strength / 360) * max-variance)
+    set perturb-started? false
+  ]
+
+  tick
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; DYNAMICS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to update-heading
+  let nearby-turtles turtles in-radius 3
+
+  if any? nearby-turtles [
+    let total-weight sum [tie-strength] of nearby-turtles
+
+    let weighted-x sum [ tie-strength * sin heading ] of nearby-turtles
+    let weighted-y sum [ tie-strength * cos heading ] of nearby-turtles
+    let avg-heading atan weighted-x weighted-y
+
+    let desired-turn 0
+    let social-component 0  ;; I004: track social alignment work separately
+
+    if entrainment-mode? [
+      set social-component (coupling-strength * coupling-bias * subtract-headings avg-heading heading)
+      set desired-turn social-component
+    ]
+
+    if not entrainment-mode? [
+      let identity-pull subtract-headings preferred-heading heading
+      let social-pull subtract-headings avg-heading heading
+
+      set social-component (coupling-strength * coupling-bias * social-pull-weight * social-pull)
+      set desired-turn social-component + (identity-pull-weight * identity-pull)
+    ]
+
+    ;; Mechanism B: Fatigue increases effective inertia (reduces turning capacity)
+    let effective-inertia inertia
+    if fatigue-enabled? [
+      let my-fatigue-level calculate-fatigue-level
+      ;; At max fatigue (level=1, intensity=1), effective-inertia → 1.0 (no turning)
+      set effective-inertia inertia + ((1 - inertia) * fatigue-intensity * my-fatigue-level)
+    ]
+
+    ;; I004: Track alignment work (social pull component actually executed)
+    let actual-social-work abs ((1 - effective-inertia) * social-component)
+    set alignment-work alignment-work + actual-social-work
+
+    set heading heading + ((1 - effective-inertia) * desired-turn)
+  ]
+end
+
+to apply-noise
+  set heading heading + (noise-level * (random-float 2 - 1) * 30)
+end
+
+to move
+  fd 0.3
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; PERTURBATION
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to perturb
+  ;; Only start new perturbation if not already perturbing
+  if not perturbing? [
+    set perturbing? true
+    set perturb-timer perturb-duration
+    set perturb-started? true
+    set last-perturb-strength perturbation-strength
+
+    ;; Reset recovery tracking for this perturbation
+    set peak-deviation 0
+    set recovery-complete? false
+    ;; NOTE: stable-baseline is NOT reset - it retains the rolling pre-perturbation value
+  ]
+end
+
+to apply-perturbation
+  ask turtles [
+    set heading heading + (random-float perturbation-strength - perturbation-strength / 2)
+  ]
+
+  set perturb-timer perturb-timer - 1
+  if perturb-timer <= 0 [
+    set perturbing? false
+    set perturb-end-tick ticks  ;; Mark when perturbation ended - recovery timing starts here
+  ]
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; REPORTERS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report heading-variance
+  if not any? turtles [
+    report 0
+  ]
+
+  let mean-heading mean [heading] of turtles
+  report mean [ abs subtract-headings heading mean-heading ] of turtles
+end
+
+;; Additional reporters for BehaviorSpace experiments
+to-report recovery-time
+  ;; Returns last-recovery-time, or -1 if recovery not yet complete
+  report last-recovery-time
+end
+
+to-report baseline
+  ;; Returns the stable baseline variance (rolling average)
+  report stable-baseline
+end
+
+to-report max-deviation
+  ;; Returns peak deviation from baseline during/after perturbation
+  report peak-deviation
+end
+
+to-report is-recovering?
+  ;; Returns true if system is still recovering from perturbation
+  report not recovery-complete?
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; COST REPORTERS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report cumulative-cost
+  ;; Total cost for a turtle (sum of all cost types)
+  report metabolic-cost + shock-cost + recovery-cost
+end
+
+to-report mean-metabolic-cost
+  if not any? turtles [ report 0 ]
+  report mean [metabolic-cost] of turtles
+end
+
+to-report mean-shock-cost
+  if not any? turtles [ report 0 ]
+  report mean [shock-cost] of turtles
+end
+
+to-report mean-recovery-cost
+  if not any? turtles [ report 0 ]
+  report mean [recovery-cost] of turtles
+end
+
+to-report mean-cumulative-cost
+  if not any? turtles [ report 0 ]
+  report mean [cumulative-cost] of turtles
+end
+
+to-report cost-variance
+  ;; Variance in cumulative cost across agents (distributional burden)
+  if not any? turtles [ report 0 ]
+  report variance [cumulative-cost] of turtles
+end
+
+to-report max-agent-cost
+  ;; Highest individual burden
+  if not any? turtles [ report 0 ]
+  report max [cumulative-cost] of turtles
+end
+
+to-report min-agent-cost
+  ;; Lowest individual burden
+  if not any? turtles [ report 0 ]
+  report min [cumulative-cost] of turtles
+end
+
+to-report cost-range-ratio
+  ;; Ratio of max to min cost (simpler inequality measure)
+  if not any? turtles [ report 0 ]
+  let min-cost min [cumulative-cost] of turtles
+  if min-cost <= 0 [ report 0 ]
+  report (max [cumulative-cost] of turtles) / min-cost
+end
+
+to-report cost-gini
+  ;; Gini coefficient of cumulative cost distribution (0 = equal, 1 = concentrated)
+  if not any? turtles [ report 0 ]
+  let costs sort [cumulative-cost] of turtles
+  let n length costs
+  if n < 2 [ report 0 ]
+
+  let total sum costs
+  if total <= 0 [ report 0 ]
+
+  ;; Compute Gini using sorted values
+  let weighted-sum 0
+  let i 1
+  foreach costs [ c ->
+    set weighted-sum weighted-sum + (i * c)
+    set i i + 1
+  ]
+
+  ;; Gini formula: G = (2 * sum(i * x_i)) / (n * sum(x_i)) - (n + 1) / n
+  report (2 * weighted-sum) / (n * total) - (n + 1) / n
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; FATIGUE REPORTERS (v1)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report calculate-fatigue-level
+  ;; Per-agent fatigue level (0 = no fatigue, 1 = max fatigue)
+  ;; Based on cumulative cost relative to threshold and saturation
+  let my-cumulative metabolic-cost + shock-cost + recovery-cost
+  ifelse my-cumulative <= fatigue-threshold [
+    report 0
+  ] [
+    report min list 1 ((my-cumulative - fatigue-threshold) / (fatigue-saturation - fatigue-threshold))
+  ]
+end
+
+to-report mean-fatigue-level
+  ;; Average fatigue across all agents
+  if not any? turtles [ report 0 ]
+  report mean [calculate-fatigue-level] of turtles
+end
+
+to-report max-fatigue-level
+  ;; Highest fatigue in the population
+  if not any? turtles [ report 0 ]
+  report max [calculate-fatigue-level] of turtles
+end
+
+to-report agents-fatigued
+  ;; Count of agents above fatigue threshold
+  if not any? turtles [ report 0 ]
+  report count turtles with [cumulative-cost > fatigue-threshold]
+end
+
+to-report mean-effective-inertia
+  ;; Average effective inertia (includes fatigue effect when enabled)
+  if not any? turtles [ report 0 ]
+  ifelse fatigue-enabled? [
+    report mean [inertia + ((1 - inertia) * fatigue-intensity * calculate-fatigue-level)] of turtles
+  ] [
+    report mean [inertia] of turtles
+  ]
+end
+
+to-report fatigue-gini
+  ;; Gini coefficient of fatigue distribution
+  if not any? turtles [ report 0 ]
+  let fatigue-levels sort [calculate-fatigue-level] of turtles
+  let n length fatigue-levels
+  if n < 2 [ report 0 ]
+
+  let total sum fatigue-levels
+  if total <= 0 [ report 0 ]
+
+  let weighted-sum 0
+  let i 1
+  foreach fatigue-levels [ f ->
+    set weighted-sum weighted-sum + (i * f)
+    set i i + 1
+  ]
+
+  report (2 * weighted-sum) / (n * total) - (n + 1) / n
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; I004: CONFIGURATION TRACKING REPORTERS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report mean-heading-of-turtles
+  ;; Circular mean heading using vector average
+  if not any? turtles [ report 0 ]
+  let mean-x mean [sin heading] of turtles
+  let mean-y mean [cos heading] of turtles
+  ifelse mean-x = 0 and mean-y = 0 [
+    report 0
+  ] [
+    report atan mean-x mean-y
+  ]
+end
+
+to-report at-risk-agents
+  ;; Agents with high coupling AND far from initial mean
+  ;; Thresholds: coupling > 0.7 (top 30%), distance > 45° (far from consensus)
+  report turtles with [coupling-bias > 0.7 and initial-distance-from-mean > 45]
+end
+
+to-report at-risk-count
+  report count at-risk-agents
+end
+
+to-report at-risk-fraction
+  if not any? turtles [ report 0 ]
+  report count at-risk-agents / count turtles
+end
+
+to-report at-risk-mean-cost
+  let at-risk at-risk-agents
+  if not any? at-risk [ report 0 ]
+  report mean [cumulative-cost] of at-risk
+end
+
+to-report at-risk-mean-alignment-work
+  let at-risk at-risk-agents
+  if not any? at-risk [ report 0 ]
+  report mean [alignment-work] of at-risk
+end
+
+to-report at-risk-max-fatigue
+  let at-risk at-risk-agents
+  if not any? at-risk [ report 0 ]
+  report max [calculate-fatigue-level] of at-risk
+end
+
+to-report at-risk-mean-fatigue
+  let at-risk at-risk-agents
+  if not any? at-risk [ report 0 ]
+  report mean [calculate-fatigue-level] of at-risk
+end
+
+to-report rest-agents
+  ;; All agents NOT at-risk
+  report turtles with [not (coupling-bias > 0.7 and initial-distance-from-mean > 45)]
+end
+
+to-report rest-mean-cost
+  let rest rest-agents
+  if not any? rest [ report 0 ]
+  report mean [cumulative-cost] of rest
+end
+
+to-report rest-mean-alignment-work
+  let rest rest-agents
+  if not any? rest [ report 0 ]
+  report mean [alignment-work] of rest
+end
+
+to-report rest-mean-fatigue
+  let rest rest-agents
+  if not any? rest [ report 0 ]
+  report mean [calculate-fatigue-level] of rest
+end
+
+to-report cost-burden-ratio
+  ;; Ratio of at-risk cost to rest-of-population cost
+  ;; >1 means at-risk agents bear disproportionate burden
+  let rest-cost rest-mean-cost
+  if rest-cost <= 0 [ report 0 ]
+  report at-risk-mean-cost / rest-cost
+end
+
+to-report alignment-work-ratio
+  ;; Ratio of at-risk alignment work to rest
+  let rest-work rest-mean-alignment-work
+  if rest-work <= 0 [ report 0 ]
+  report at-risk-mean-alignment-work / rest-work
+end
+
+to-report fatigue-burden-ratio
+  ;; Ratio of at-risk fatigue to rest
+  let rest-fatigue rest-mean-fatigue
+  if rest-fatigue <= 0 [ report 0 ]
+  report at-risk-mean-fatigue / rest-fatigue
+end
+
+to-report mean-initial-distance
+  ;; Average initial distance from mean (for summary)
+  if not any? turtles [ report 0 ]
+  report mean [initial-distance-from-mean] of turtles
+end
+
+to-report mean-alignment-work
+  ;; Average alignment work across all agents
+  if not any? turtles [ report 0 ]
+  report mean [alignment-work] of turtles
+end
+
+to-report max-alignment-work
+  ;; Highest alignment work (who worked hardest)
+  if not any? turtles [ report 0 ]
+  report max [alignment-work] of turtles
+end
+
+to-report alignment-work-gini
+  ;; Gini coefficient of alignment work distribution
+  if not any? turtles [ report 0 ]
+  let work-values sort [alignment-work] of turtles
+  let n length work-values
+  if n < 2 [ report 0 ]
+
+  let total sum work-values
+  if total <= 0 [ report 0 ]
+
+  let weighted-sum 0
+  let i 1
+  foreach work-values [ w ->
+    set weighted-sum weighted-sum + (i * w)
+    set i i + 1
+  ]
+
+  report (2 * weighted-sum) / (n * total) - (n + 1) / n
+end
+]]></code>
+  <widgets>
+    <view x="20" wrappingAllowedX="true" y="25" frameRate="30.0" minPycor="-16" height="455" showTickCounter="true" patchSize="13.67" fontSize="10" wrappingAllowedY="true" width="455" tickCounterLabel="ticks" maxPycor="16" updateMode="0" maxPxcor="16" minPxcor="-16"></view>
+    <plot x="1050" autoPlotX="true" yMax="10.0" autoPlotY="true" yAxis="Mean angular deviation (degrees)" y="25" xMin="0.0" height="395" legend="true" xMax="10.0" yMin="0.0" width="660" display="Heading Variance Over Time">
+      <setup></setup>
+      <update></update>
+      <pen interval="1.0" mode="0" display="variance" color="-13791810" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+      <pen interval="1.0" mode="0" display="perturb" color="-2674135" legend="true">
+        <setup></setup>
+        <update></update>
+      </pen>
+    </plot>
+    <monitor x="1050" precision="2" y="430" height="65" fontSize="13" width="125" display="heading variance">heading-variance</monitor>
+    <monitor x="1185" precision="17" y="430" height="65" fontSize="13" width="145" display="recovery time (ticks)">last-recovery-time</monitor>
+    <monitor x="1340" precision="2" y="430" height="65" fontSize="13" width="125" display="mean cost">mean-cumulative-cost</monitor>
+    <monitor x="1475" precision="2" y="430" height="65" fontSize="13" width="125" display="cost variance">cost-variance</monitor>
+    <monitor x="1610" precision="3" y="430" height="65" fontSize="13" width="100" display="cost gini">cost-gini</monitor>
+    <switch x="760" y="25" height="50" on="true" variable="entrainment-mode?" width="275" display="entrainment-mode?"></switch>
+    <slider x="760" step="0.05" y="565" max="1" width="275" display="fatigue-intensity" height="50" min="0" direction="Horizontal" default="0.5" variable="fatigue-intensity"></slider>
+    <slider x="760" step="100" y="505" max="5000" width="275" display="fatigue-saturation" height="50" min="500" direction="Horizontal" default="2000.0" variable="fatigue-saturation"></slider>
+    <slider x="760" step="50" y="445" max="2000" width="275" display="fatigue-threshold" height="50" min="0" direction="Horizontal" default="500.0" variable="fatigue-threshold"></slider>
+    <slider x="760" step="0.01" y="385" max="1" width="275" display="recovery-rate" height="50" min="0" direction="Horizontal" default="0.05" variable="recovery-rate"></slider>
+    <slider x="485" step="0.05" y="445" max="1" width="260" display="social-pull-weight" height="50" min="0" direction="Horizontal" default="0.5" variable="social-pull-weight"></slider>
+    <slider x="485" step="0.05" y="385" max="1" width="260" display="identity-pull-weight" height="50" min="0" direction="Horizontal" default="0.2" variable="identity-pull-weight"></slider>
+    <slider x="760" step="0.1" y="325" max="5" width="275" display="shock-multiplier" height="50" min="0" direction="Horizontal" default="1.0" variable="shock-multiplier"></slider>
+    <slider x="760" step="0.01" y="265" max="1" width="275" display="metabolic-rate" height="50" min="0" direction="Horizontal" default="0.1" variable="metabolic-rate"></slider>
+    <slider x="760" step="0.005" y="205" max="0.12" width="275" display="target-coupling-bias-variance" height="50" min="0.01" direction="Horizontal" default="0.083" variable="target-coupling-bias-variance"></slider>
+    <switch x="760" y="145" height="50" on="false" variable="controlled-variance?" width="275" display="controlled-variance?"></switch>
+    <switch x="760" y="85" height="50" on="true" variable="fatigue-enabled?" width="275" display="fatigue-enabled?"></switch>
+    <slider x="485" step="1" y="265" max="300" width="260" display="perturb-duration" height="50" min="0" direction="Horizontal" default="144.0" variable="perturb-duration" units="ticks"></slider>
+    <slider x="485" step="0.5" y="325" max="60" width="260" display="recovery-tolerance" height="50" min="0" direction="Horizontal" default="5.0" variable="recovery-tolerance" units="degrees"></slider>
+    <slider x="485" step="1" y="205" max="180" width="260" display="perturbation-strength" height="50" min="0" direction="Horizontal" default="93.0" variable="perturbation-strength" units="degrees"></slider>
+    <slider x="485" step="0.01" y="145" max="1" width="260" display="coupling-strength" height="50" min="0" direction="Horizontal" default="0.4" variable="coupling-strength" units="–"></slider>
+    <slider x="485" step="0.01" y="85" max="1" width="260" display="noise-level" height="50" min="0" direction="Horizontal" default="0.3" variable="noise-level" units="env. variability"></slider>
+    <slider x="485" step="1" y="25" max="1000" width="260" display="population" height="50" min="0" direction="Horizontal" default="100.0" variable="population"></slider>
+    <button x="20" y="490" height="45" disableUntilTicks="false" forever="false" kind="Observer" width="105" display="setup">setup</button>
+    <button x="235" y="490" height="45" disableUntilTicks="false" forever="false" kind="Observer" width="120" display="perturb">perturb</button>
+    <button x="135" y="490" height="45" disableUntilTicks="false" forever="true" kind="Observer" width="90" display="go">go</button>
+    <chooser x="20" y="545" height="60" variable="perturbation-regime" current="3" width="335" display="perturbation-regime">
+      <choice type="string" value="none"></choice>
+      <choice type="string" value="single"></choice>
+      <choice type="string" value="periodic"></choice>
+      <choice type="string" value="irregular"></choice>
+    </chooser>
+    <slider x="485" step="0.005" y="505" max="0.1" width="260" display="cost-decay-rate" height="50" min="0" direction="Horizontal" default="0.01" variable="cost-decay-rate"></slider>
+    <monitor x="1440" precision="2" y="505" height="60" fontSize="11" width="120" display="eff. inertia">mean-effective-inertia</monitor>
+    <monitor x="1310" precision="0" y="505" height="60" fontSize="11" width="120" display="agents fatigued">agents-fatigued</monitor>
+    <monitor x="1180" precision="2" y="505" height="60" fontSize="11" width="120" display="max fatigue">max-fatigue-level</monitor>
+    <monitor x="1050" precision="2" y="505" height="60" fontSize="11" width="120" display="mean fatigue">mean-fatigue-level</monitor>
+  </widgets>
+  <info>## WHAT IS IT?
+
+This model explores the difference between *entrainment* and *coherence* in collective systems.
+
+Rather than treating coherence as synchrony or uniformity, the model operationalises coherence as the *capacity of a system to maintain integrity, identity, and relational viability while encountering and reorganising through incoherence and perturbation*.
+
+Using a simple agent-based system of moving agents ("turtles") with heterogeneous traits, the model demonstrates how:
+
+- entrainment suppresses variance through phase-locking but can become brittle under perturbation
+- coherence maintains bounded, ongoing variation and absorbs perturbations without collapse
+- heterogeneity and temporal lag fundamentally change how systems respond to disturbance
+
+The model is intended as a **conceptual instrument**, not a predictive simulation.
+
+
+## HOW IT WORKS
+
+Each turtle represents an agent with a heading (direction of movement) and a set of internal traits.
+
+At each tick:
+
+- turtles observe nearby neighbours
+- they adjust their heading based on local social influence, internal preference, and noise
+- they move forward a small distance
+- costs accumulate based on heading adjustments and system state
+- if fatigue is enabled, accumulated costs affect agent responsiveness
+
+Two coordination regimes are available:
+
+### Entrainment mode
+
+When `entrainment-mode?` is ON:
+
+- turtles strongly align their heading with the average heading of nearby turtles
+- alignment strength is modulated by each turtle's `coupling-bias`
+- variance is actively suppressed through phase-locking
+
+### Coherence mode
+
+When `entrainment-mode?` is OFF:
+
+- turtles experience weaker social pull (scaled by `social-pull-weight`)
+- they retain an internal preferred heading ("identity") via `identity-pull-weight`
+- incoherence is tolerated rather than suppressed
+
+### Agent Traits
+
+Each turtle has four traits:
+
+- **preferred-heading**: internal orientation tendency (identity proxy, set at setup)
+- **coupling-bias**: how strongly it responds to social alignment (0–1)
+- **inertia**: how slowly it can change its heading over time (0–1)
+- **tie-strength**: how influential this turtle is to others (0–1)
+
+These traits introduce persistent heterogeneity and temporal lag, allowing the system to express structural and generative incoherence rather than just noise.
+
+### Perturbations
+
+Perturbations apply a temporary, external disturbance to turtle headings. They represent shocks rather than sustained forces and are used to probe system resilience and recovery.
+
+### Cost Tracking
+
+Agents accumulate three types of cost:
+
+- **metabolic-cost**: continuous cost from heading adjustments (regulatory effort)
+- **shock-cost**: cost incurred during active perturbations
+- **recovery-cost**: cost incurred while recovering from perturbation
+
+Cost distribution is tracked via Gini coefficient and variance, revealing whether burden falls equally or concentrates on certain agents.
+
+### Fatigue Extension
+
+When `fatigue-enabled?` is ON, accumulated costs affect agent dynamics:
+
+- **Effective inertia increases**: fatigued agents turn more slowly
+- **Recovery rate increases**: fatigued agents accumulate recovery costs faster
+- **Cost decay**: during stable periods, costs decay exponentially (controlled by `cost-decay-rate`)
+
+This creates potential feedback spirals: high cost → fatigue → slower recovery → more cost. The identity-pull mechanism in coherence mode provides an escape valve that prevents this spiral.
+
+### Recovery Tracking
+
+The model tracks recovery dynamics after perturbations:
+
+- **stable-baseline**: rolling 50-tick average of heading variance before perturbation
+- **peak-deviation**: maximum deviation from baseline during/after perturbation
+- **recovery-time**: ticks from perturbation END until variance returns within tolerance
+
+
+## HOW TO USE IT
+
+### Buttons
+
+- **setup**: Clears the world and creates a new population of turtles with random headings and traits.
+- **go**: Runs the model continuously.
+- **perturb**: Applies a perturbation to all turtles immediately.
+
+### Core Sliders
+
+- **population**: Number of turtles in the model.
+- **noise-level**: Amount of random fluctuation applied to headings each tick.
+- **coupling-strength**: Overall strength of social influence between turtles.
+
+### Perturbation Sliders
+
+- **perturbation-strength**: Magnitude of heading disturbance applied during perturbations (degrees).
+- **perturb-duration**: How long each perturbation lasts (ticks).
+- **recovery-tolerance**: How close to baseline variance must return to count as "recovered" (degrees).
+
+### Coherence Mode Sliders
+
+- **identity-pull-weight**: Strength of return toward preferred-heading in coherence mode (default 0.2).
+- **social-pull-weight**: Attenuation of social coupling in coherence mode (default 0.5).
+
+### Cost Parameters
+
+- **metabolic-rate**: Cost per degree of heading adjustment (default 0.1).
+- **shock-multiplier**: Multiplier for perturbation-induced cost (default 1.0).
+- **recovery-rate**: Cost per degree deviation during recovery (default 0.05).
+- **cost-decay-rate**: Exponential decay of costs during stable periods (default 0.01).
+
+### Fatigue Parameters
+
+- **fatigue-threshold**: Cumulative cost before fatigue effects begin (default 500).
+- **fatigue-saturation**: Cost at which fatigue is maximal (default 2000).
+- **fatigue-intensity**: Strength of fatigue effects on agent dynamics (default 0.5).
+
+### Experimental Parameters (I003)
+
+- **target-coupling-bias-variance**: Target variance for coupling-bias distribution when controlled (0.01–0.12).
+
+### Switches
+
+- **entrainment-mode?**: Toggles between entrainment (phase-locking) and coherence (adaptive coordination).
+- **fatigue-enabled?**: Enables fatigue feedback loop (cost affects agent responsiveness).
+- **controlled-variance?**: When ON, coupling-bias variance is set precisely rather than random.
+
+### Chooser
+
+- **perturbation-regime**: Selects temporal pattern of disturbances (none, single shock, periodic stress, or irregular shocks).
+
+### Monitors
+
+**Variance and Recovery:**
+- **heading variance**: Current mean angular deviation from population mean.
+- **recovery time**: Ticks from perturbation end until variance returned to tolerance.
+
+**Cost Distribution:**
+- **mean cost**: Average cumulative cost across all agents.
+- **cost variance**: Variance in cost distribution (how unequally burden is spread).
+- **cost gini**: Gini coefficient of cost distribution (0 = equal, 1 = concentrated).
+
+**Fatigue State:**
+- **mean fatigue**: Average fatigue level across population.
+- **max fatigue**: Highest individual fatigue level.
+- **agents fatigued**: Count of agents above fatigue threshold.
+- **eff. inertia**: Average effective inertia (increases with fatigue).
+
+### Plot
+
+- **Heading Variance Over Time**: Time series of mean angular deviation, showing perturbation responses and recovery dynamics.
+
+### Visual Encoding
+
+Arrow direction shows heading. Circle size reflects tie strength (influence). Arrow color reflects coupling bias (blue gradient, darker = higher susceptibility to social alignment).
+
+## THINGS TO NOTICE
+
+**Variance dynamics:**
+- In entrainment mode, variance often collapses toward zero, producing apparent order.
+- Under repeated or strong perturbation, entrained systems can show large variance spikes and incomplete recovery.
+- In coherence mode, variance remains non-zero but bounded.
+- With heterogeneous traits, perturbations are often absorbed rather than amplified.
+
+**Cost and fatigue dynamics:**
+- Coherence mode has slightly higher cost Gini than entrainment — the cost of diversity falls on those who hold it.
+- Under periodic stress, entrainment accumulates much more recovery cost because it never fully stabilizes between shocks.
+- Watch for fatigue spirals in entrainment mode: high-coupling agents can accumulate costs faster than they decay.
+- Coherence rarely spirals because identity-pull provides an escape valve independent of social field state.
+
+**Critical thresholds:**
+- Below perturbation strength ~30, both modes perform similarly.
+- Above ~40, entrainment shows superlinear degradation while coherence scales linearly.
+- Whether entrainment spirals depends on coupling-bias variance — higher variance increases spiral risk.
+
+
+## THINGS TO TRY
+
+**Basic comparisons:**
+- Run coherence mode with periodic perturbations; repeat with entrainment-mode enabled.
+- Compare recovery times and variance spikes between the two regimes.
+- Increase perturbation-strength incrementally to find the brittle threshold.
+
+**Cost exploration:**
+- Watch cost-gini over time — does burden concentrate or spread?
+- Compare mean-cost vs max-agent-cost to see if some agents bear disproportionate load.
+- Enable fatigue and observe how cost accumulation affects recovery dynamics.
+
+**Fatigue dynamics:**
+- Set fatigue-enabled ON and run periodic perturbations.
+- Increase fatigue-intensity to accelerate spiral onset.
+- Reduce cost-decay-rate to simulate slow recovery contexts.
+- Toggle between modes mid-run to see if coherence can rescue a fatiguing system.
+
+**Variance control (I003):**
+- Enable controlled-variance and sweep target-coupling-bias-variance from 0.01 to 0.12.
+- Observe how higher coupling-bias variance increases spiral probability in entrainment mode.
+
+
+## EXTENDING THE MODEL
+
+**Already implemented:**
+- Recovery time measurement (recovery tracking v2)
+- Cost tracking with distribution metrics (Gini coefficient)
+- Fatigue feedback loop affecting agent dynamics
+- Controlled coupling-bias variance for mechanism testing
+
+**Possible future extensions:**
+- Adding memory or learning to agent preferences
+- Distinguishing regenerative, generative, and degenerative incoherence quantitatively
+- Adding spatially local perturbations
+- Introducing asymmetric influence or leadership roles
+- Plotting cluster persistence or local coherence instead of global variance
+- Exploring multi-scale or nested agent structures
+- Adaptive coupling based on tie strength
+- Cross-scale perturbation propagation
+
+
+## NETLOGO FEATURES
+
+This model uses:
+
+- circular heading arithmetic (`subtract-headings`) to handle angular dynamics correctly
+- agent-owned variables (`turtles-own`) to represent persistent traits
+- plot-driven diagnostics rather than rule-based outcomes
+- trait-modulated coupling to avoid homogeneous agent assumptions
+
+The model intentionally avoids optimisation, goal functions, or global control.
+
+
+## RELATED MODELS
+
+Related NetLogo models include:
+
+- **Flocking**
+- **Alignment**
+- **Boids**
+- **Fireflies** (synchronisation models)
+
+This model differs by explicitly separating synchrony (entrainment) from adaptive coherence and by foregrounding heterogeneity and perturbation response.
+
+
+## CREDITS AND REFERENCES
+
+Model developed by action researcher Mathew Mytka [Moral Imagineer](https://moralimagineer.com).
+
+Conceptual influences include:
+
+- complex adaptive systems
+- non-linear dynamical systems
+- ecological resilience theory
+- critiques of synchrony-based coherence
+- agent-based modelling for sensemaking
+
+This model is intended for exploratory, educational, and conceptual research use.</info>
+  <turtleShapes>
+    <shape name="default" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="5"></point>
+        <point x="40" y="250"></point>
+        <point x="150" y="205"></point>
+        <point x="260" y="250"></point>
+      </polygon>
+    </shape>
+    <shape name="agent-field" rotatable="true" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="false"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="20"></point>
+        <point x="60" y="240"></point>
+        <point x="150" y="210"></point>
+        <point x="240" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="airplane" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="135" y="15"></point>
+        <point x="120" y="60"></point>
+        <point x="120" y="105"></point>
+        <point x="15" y="165"></point>
+        <point x="15" y="195"></point>
+        <point x="120" y="180"></point>
+        <point x="135" y="240"></point>
+        <point x="105" y="270"></point>
+        <point x="120" y="285"></point>
+        <point x="150" y="270"></point>
+        <point x="180" y="285"></point>
+        <point x="210" y="270"></point>
+        <point x="165" y="240"></point>
+        <point x="180" y="180"></point>
+        <point x="285" y="195"></point>
+        <point x="285" y="165"></point>
+        <point x="180" y="105"></point>
+        <point x="180" y="60"></point>
+        <point x="165" y="15"></point>
+      </polygon>
+    </shape>
+    <shape name="arrow" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="0"></point>
+        <point x="0" y="150"></point>
+        <point x="105" y="150"></point>
+        <point x="105" y="293"></point>
+        <point x="195" y="293"></point>
+        <point x="195" y="150"></point>
+        <point x="300" y="150"></point>
+      </polygon>
+    </shape>
+    <shape name="box" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="285"></point>
+        <point x="285" y="225"></point>
+        <point x="285" y="75"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="135"></point>
+        <point x="15" y="75"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="75"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="75"></point>
+        <point x="15" y="225"></point>
+        <point x="150" y="285"></point>
+        <point x="150" y="135"></point>
+      </polygon>
+      <line endX="150" startY="285" marked="false" color="255" endY="135" startX="150"></line>
+      <line endX="15" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+      <line endX="285" startY="135" marked="false" color="255" endY="75" startX="150"></line>
+    </shape>
+    <shape name="bug" rotatable="true" editableColorIndex="0">
+      <circle x="96" y="182" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="110" y="127" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <circle x="110" y="75" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <line endX="80" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+      <line endX="220" startY="100" marked="true" color="-1920102913" endY="30" startX="150"></line>
+    </shape>
+    <shape name="butterfly" rotatable="true" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="209" y="199"></point>
+        <point x="225" y="225"></point>
+        <point x="225" y="255"></point>
+        <point x="195" y="270"></point>
+        <point x="165" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="165"></point>
+        <point x="89" y="198"></point>
+        <point x="75" y="225"></point>
+        <point x="75" y="255"></point>
+        <point x="105" y="270"></point>
+        <point x="135" y="255"></point>
+        <point x="150" y="240"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="139" y="148"></point>
+        <point x="100" y="105"></point>
+        <point x="55" y="90"></point>
+        <point x="25" y="90"></point>
+        <point x="10" y="105"></point>
+        <point x="10" y="135"></point>
+        <point x="25" y="180"></point>
+        <point x="40" y="195"></point>
+        <point x="85" y="194"></point>
+        <point x="139" y="163"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="162" y="150"></point>
+        <point x="200" y="105"></point>
+        <point x="245" y="90"></point>
+        <point x="275" y="90"></point>
+        <point x="290" y="105"></point>
+        <point x="290" y="135"></point>
+        <point x="275" y="180"></point>
+        <point x="260" y="195"></point>
+        <point x="215" y="195"></point>
+        <point x="162" y="165"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="135" y="225"></point>
+        <point x="120" y="150"></point>
+        <point x="135" y="120"></point>
+        <point x="150" y="105"></point>
+        <point x="165" y="120"></point>
+        <point x="180" y="150"></point>
+        <point x="165" y="225"></point>
+      </polygon>
+      <circle x="135" y="90" marked="false" color="255" diameter="30" filled="true"></circle>
+      <line endX="195" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+      <line endX="105" startY="105" marked="false" color="255" endY="60" startX="150"></line>
+    </shape>
+    <shape name="car" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="300" y="180"></point>
+        <point x="279" y="164"></point>
+        <point x="261" y="144"></point>
+        <point x="240" y="135"></point>
+        <point x="226" y="132"></point>
+        <point x="213" y="106"></point>
+        <point x="203" y="84"></point>
+        <point x="185" y="63"></point>
+        <point x="159" y="50"></point>
+        <point x="135" y="50"></point>
+        <point x="75" y="60"></point>
+        <point x="0" y="150"></point>
+        <point x="0" y="165"></point>
+        <point x="0" y="225"></point>
+        <point x="300" y="225"></point>
+        <point x="300" y="180"></point>
+      </polygon>
+      <circle x="180" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <circle x="30" y="180" marked="false" color="255" diameter="90" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="162" y="80"></point>
+        <point x="132" y="78"></point>
+        <point x="134" y="135"></point>
+        <point x="209" y="135"></point>
+        <point x="194" y="105"></point>
+        <point x="189" y="96"></point>
+        <point x="180" y="89"></point>
+      </polygon>
+      <circle x="47" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+      <circle x="195" y="195" marked="true" color="-1920102913" diameter="58" filled="true"></circle>
+    </shape>
+    <shape name="circle" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="circle 2" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cow" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="200" y="193"></point>
+        <point x="197" y="249"></point>
+        <point x="179" y="249"></point>
+        <point x="177" y="196"></point>
+        <point x="166" y="187"></point>
+        <point x="140" y="189"></point>
+        <point x="93" y="191"></point>
+        <point x="78" y="179"></point>
+        <point x="72" y="211"></point>
+        <point x="49" y="209"></point>
+        <point x="48" y="181"></point>
+        <point x="37" y="149"></point>
+        <point x="25" y="120"></point>
+        <point x="25" y="89"></point>
+        <point x="45" y="72"></point>
+        <point x="103" y="84"></point>
+        <point x="179" y="75"></point>
+        <point x="198" y="76"></point>
+        <point x="252" y="64"></point>
+        <point x="272" y="81"></point>
+        <point x="293" y="103"></point>
+        <point x="285" y="121"></point>
+        <point x="255" y="121"></point>
+        <point x="242" y="118"></point>
+        <point x="224" y="167"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="73" y="210"></point>
+        <point x="86" y="251"></point>
+        <point x="62" y="249"></point>
+        <point x="48" y="208"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="25" y="114"></point>
+        <point x="16" y="195"></point>
+        <point x="9" y="204"></point>
+        <point x="23" y="213"></point>
+        <point x="25" y="200"></point>
+        <point x="39" y="123"></point>
+      </polygon>
+    </shape>
+    <shape name="cylinder" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+    </shape>
+    <shape name="dot" rotatable="false" editableColorIndex="0">
+      <circle x="90" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+    </shape>
+    <shape name="face happy" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="255"></point>
+        <point x="90" y="239"></point>
+        <point x="62" y="213"></point>
+        <point x="47" y="191"></point>
+        <point x="67" y="179"></point>
+        <point x="90" y="203"></point>
+        <point x="109" y="218"></point>
+        <point x="150" y="225"></point>
+        <point x="192" y="218"></point>
+        <point x="210" y="203"></point>
+        <point x="227" y="181"></point>
+        <point x="251" y="194"></point>
+        <point x="236" y="217"></point>
+        <point x="212" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="face neutral" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="7" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <rectangle endX="240" startY="195" marked="false" color="255" endY="225" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="face sad" rotatable="false" editableColorIndex="0">
+      <circle x="8" y="8" marked="true" color="-1920102913" diameter="285" filled="true"></circle>
+      <circle x="60" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <circle x="180" y="75" marked="false" color="255" diameter="60" filled="true"></circle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="150" y="168"></point>
+        <point x="90" y="184"></point>
+        <point x="62" y="210"></point>
+        <point x="47" y="232"></point>
+        <point x="67" y="244"></point>
+        <point x="90" y="220"></point>
+        <point x="109" y="205"></point>
+        <point x="150" y="198"></point>
+        <point x="192" y="205"></point>
+        <point x="210" y="220"></point>
+        <point x="227" y="242"></point>
+        <point x="251" y="229"></point>
+        <point x="236" y="206"></point>
+        <point x="212" y="183"></point>
+      </polygon>
+    </shape>
+    <shape name="fish" rotatable="false" editableColorIndex="0">
+      <polygon color="-1" filled="true" marked="false">
+        <point x="44" y="131"></point>
+        <point x="21" y="87"></point>
+        <point x="15" y="86"></point>
+        <point x="0" y="120"></point>
+        <point x="15" y="150"></point>
+        <point x="0" y="180"></point>
+        <point x="13" y="214"></point>
+        <point x="20" y="212"></point>
+        <point x="45" y="166"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="135" y="195"></point>
+        <point x="119" y="235"></point>
+        <point x="95" y="218"></point>
+        <point x="76" y="210"></point>
+        <point x="46" y="204"></point>
+        <point x="60" y="165"></point>
+      </polygon>
+      <polygon color="-1" filled="true" marked="false">
+        <point x="75" y="45"></point>
+        <point x="83" y="77"></point>
+        <point x="71" y="103"></point>
+        <point x="86" y="114"></point>
+        <point x="166" y="78"></point>
+        <point x="135" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="136"></point>
+        <point x="151" y="77"></point>
+        <point x="226" y="81"></point>
+        <point x="280" y="119"></point>
+        <point x="292" y="146"></point>
+        <point x="292" y="160"></point>
+        <point x="287" y="170"></point>
+        <point x="270" y="195"></point>
+        <point x="195" y="210"></point>
+        <point x="151" y="212"></point>
+        <point x="30" y="166"></point>
+      </polygon>
+      <circle x="215" y="106" marked="false" color="255" diameter="30" filled="true"></circle>
+    </shape>
+    <shape name="flag" rotatable="false" editableColorIndex="0">
+      <rectangle endX="75" startY="15" marked="true" color="-1920102913" endY="300" startX="60" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="90" y="150"></point>
+        <point x="270" y="90"></point>
+        <point x="90" y="30"></point>
+      </polygon>
+      <line endX="90" startY="135" marked="true" color="-1920102913" endY="135" startX="75"></line>
+      <line endX="90" startY="45" marked="true" color="-1920102913" endY="45" startX="75"></line>
+    </shape>
+    <shape name="flower" rotatable="false" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="135" y="120"></point>
+        <point x="165" y="165"></point>
+        <point x="180" y="210"></point>
+        <point x="180" y="240"></point>
+        <point x="150" y="300"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="240"></point>
+        <point x="195" y="195"></point>
+        <point x="165" y="135"></point>
+      </polygon>
+      <circle x="85" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="147" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="192" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="85" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="40" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="177" y="132" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="70" y="85" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="130" y="25" marked="true" color="-1920102913" diameter="38" filled="true"></circle>
+      <circle x="96" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="113" y="68" marked="false" color="255" diameter="74" filled="true"></circle>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="189" y="233"></point>
+        <point x="219" y="188"></point>
+        <point x="249" y="173"></point>
+        <point x="279" y="188"></point>
+        <point x="234" y="218"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="180" y="255"></point>
+        <point x="150" y="210"></point>
+        <point x="105" y="210"></point>
+        <point x="75" y="240"></point>
+        <point x="135" y="240"></point>
+      </polygon>
+    </shape>
+    <shape name="house" rotatable="false" editableColorIndex="0">
+      <rectangle endX="255" startY="120" marked="true" color="-1920102913" endY="285" startX="45" filled="true"></rectangle>
+      <rectangle endX="180" startY="210" marked="false" color="255" endY="285" startX="120" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="15" y="120"></point>
+        <point x="150" y="15"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+      <line endX="270" startY="120" marked="false" color="255" endY="120" startX="30"></line>
+    </shape>
+    <shape name="leaf" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="210"></point>
+        <point x="135" y="195"></point>
+        <point x="120" y="210"></point>
+        <point x="60" y="210"></point>
+        <point x="30" y="195"></point>
+        <point x="60" y="180"></point>
+        <point x="60" y="165"></point>
+        <point x="15" y="135"></point>
+        <point x="30" y="120"></point>
+        <point x="15" y="105"></point>
+        <point x="40" y="104"></point>
+        <point x="45" y="90"></point>
+        <point x="60" y="90"></point>
+        <point x="90" y="105"></point>
+        <point x="105" y="120"></point>
+        <point x="120" y="120"></point>
+        <point x="105" y="60"></point>
+        <point x="120" y="60"></point>
+        <point x="135" y="30"></point>
+        <point x="150" y="15"></point>
+        <point x="165" y="30"></point>
+        <point x="180" y="60"></point>
+        <point x="195" y="60"></point>
+        <point x="180" y="120"></point>
+        <point x="195" y="120"></point>
+        <point x="210" y="105"></point>
+        <point x="240" y="90"></point>
+        <point x="255" y="90"></point>
+        <point x="263" y="104"></point>
+        <point x="285" y="105"></point>
+        <point x="270" y="120"></point>
+        <point x="285" y="135"></point>
+        <point x="240" y="165"></point>
+        <point x="240" y="180"></point>
+        <point x="270" y="195"></point>
+        <point x="240" y="210"></point>
+        <point x="180" y="210"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="195"></point>
+        <point x="135" y="240"></point>
+        <point x="120" y="255"></point>
+        <point x="105" y="255"></point>
+        <point x="105" y="285"></point>
+        <point x="135" y="285"></point>
+        <point x="165" y="240"></point>
+        <point x="165" y="195"></point>
+      </polygon>
+    </shape>
+    <shape name="line" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="300" startX="150"></line>
+    </shape>
+    <shape name="line half" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
+    </shape>
+    <shape name="pentagon" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="15"></point>
+        <point x="15" y="120"></point>
+        <point x="60" y="285"></point>
+        <point x="240" y="285"></point>
+        <point x="285" y="120"></point>
+      </polygon>
+    </shape>
+    <shape name="person" rotatable="false" editableColorIndex="0">
+      <circle x="110" y="5" marked="true" color="-1920102913" diameter="80" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="120" y="195"></point>
+        <point x="90" y="285"></point>
+        <point x="105" y="300"></point>
+        <point x="135" y="300"></point>
+        <point x="150" y="225"></point>
+        <point x="165" y="300"></point>
+        <point x="195" y="300"></point>
+        <point x="210" y="285"></point>
+        <point x="180" y="195"></point>
+        <point x="195" y="90"></point>
+      </polygon>
+      <rectangle endX="172" startY="79" marked="true" color="-1920102913" endY="94" startX="127" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="195" y="90"></point>
+        <point x="240" y="150"></point>
+        <point x="225" y="180"></point>
+        <point x="165" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="105" y="90"></point>
+        <point x="60" y="150"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="105"></point>
+      </polygon>
+    </shape>
+    <shape name="plant" rotatable="false" editableColorIndex="0">
+      <rectangle endX="165" startY="90" marked="true" color="-1920102913" endY="300" startX="135" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="255"></point>
+        <point x="90" y="210"></point>
+        <point x="45" y="195"></point>
+        <point x="75" y="255"></point>
+        <point x="135" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="255"></point>
+        <point x="210" y="210"></point>
+        <point x="255" y="195"></point>
+        <point x="225" y="255"></point>
+        <point x="165" y="285"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="180"></point>
+        <point x="90" y="135"></point>
+        <point x="45" y="120"></point>
+        <point x="75" y="180"></point>
+        <point x="135" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="180"></point>
+        <point x="165" y="210"></point>
+        <point x="225" y="180"></point>
+        <point x="255" y="120"></point>
+        <point x="210" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="105"></point>
+        <point x="90" y="60"></point>
+        <point x="45" y="45"></point>
+        <point x="75" y="105"></point>
+        <point x="135" y="135"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="165" y="105"></point>
+        <point x="165" y="135"></point>
+        <point x="225" y="105"></point>
+        <point x="255" y="45"></point>
+        <point x="210" y="60"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="135" y="90"></point>
+        <point x="120" y="45"></point>
+        <point x="150" y="15"></point>
+        <point x="180" y="45"></point>
+        <point x="165" y="90"></point>
+      </polygon>
+    </shape>
+    <shape name="sheep" rotatable="false" editableColorIndex="15">
+      <circle x="203" y="65" marked="true" color="-1" diameter="88" filled="true"></circle>
+      <circle x="70" y="65" marked="true" color="-1" diameter="162" filled="true"></circle>
+      <circle x="150" y="105" marked="true" color="-1" diameter="120" filled="true"></circle>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="218" y="120"></point>
+        <point x="240" y="165"></point>
+        <point x="255" y="165"></point>
+        <point x="278" y="120"></point>
+      </polygon>
+      <circle x="214" y="72" marked="false" color="-1920102913" diameter="67" filled="true"></circle>
+      <rectangle endX="179" startY="223" marked="true" color="-1" endY="298" startX="164" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="45" y="285"></point>
+        <point x="30" y="285"></point>
+        <point x="30" y="240"></point>
+        <point x="15" y="195"></point>
+        <point x="45" y="210"></point>
+      </polygon>
+      <circle x="3" y="83" marked="true" color="-1" diameter="150" filled="true"></circle>
+      <rectangle endX="80" startY="221" marked="true" color="-1" endY="296" startX="65" filled="true"></rectangle>
+      <polygon color="-1" filled="true" marked="true">
+        <point x="195" y="285"></point>
+        <point x="210" y="285"></point>
+        <point x="210" y="240"></point>
+        <point x="240" y="210"></point>
+        <point x="195" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="276" y="85"></point>
+        <point x="285" y="105"></point>
+        <point x="302" y="99"></point>
+        <point x="294" y="83"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="false">
+        <point x="219" y="85"></point>
+        <point x="210" y="105"></point>
+        <point x="193" y="99"></point>
+        <point x="201" y="83"></point>
+      </polygon>
+    </shape>
+    <shape name="square" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+    </shape>
+    <shape name="square 2" rotatable="false" editableColorIndex="0">
+      <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
+      <rectangle endX="240" startY="60" marked="false" color="255" endY="240" startX="60" filled="true"></rectangle>
+    </shape>
+    <shape name="star" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="151" y="1"></point>
+        <point x="185" y="108"></point>
+        <point x="298" y="108"></point>
+        <point x="207" y="175"></point>
+        <point x="242" y="282"></point>
+        <point x="151" y="216"></point>
+        <point x="59" y="282"></point>
+        <point x="94" y="175"></point>
+        <point x="3" y="108"></point>
+        <point x="116" y="108"></point>
+      </polygon>
+    </shape>
+    <shape name="target" rotatable="false" editableColorIndex="0">
+      <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <circle x="60" y="60" marked="true" color="-1920102913" diameter="180" filled="true"></circle>
+      <circle x="90" y="90" marked="false" color="255" diameter="120" filled="true"></circle>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+    </shape>
+    <shape name="tree" rotatable="false" editableColorIndex="0">
+      <circle x="118" y="3" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <rectangle endX="180" startY="195" marked="false" color="-1653716737" endY="300" startX="120" filled="true"></rectangle>
+      <circle x="65" y="21" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="116" y="41" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="45" y="90" marked="true" color="-1920102913" diameter="120" filled="true"></circle>
+      <circle x="104" y="74" marked="true" color="-1920102913" diameter="152" filled="true"></circle>
+    </shape>
+    <shape name="triangle" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+    </shape>
+    <shape name="triangle 2" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="150" y="30"></point>
+        <point x="15" y="255"></point>
+        <point x="285" y="255"></point>
+      </polygon>
+      <polygon color="255" filled="true" marked="false">
+        <point x="151" y="99"></point>
+        <point x="225" y="223"></point>
+        <point x="75" y="224"></point>
+      </polygon>
+    </shape>
+    <shape name="truck" rotatable="false" editableColorIndex="0">
+      <rectangle endX="195" startY="45" marked="true" color="-1920102913" endY="187" startX="4" filled="true"></rectangle>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="296" y="193"></point>
+        <point x="296" y="150"></point>
+        <point x="259" y="134"></point>
+        <point x="244" y="104"></point>
+        <point x="208" y="104"></point>
+        <point x="207" y="194"></point>
+      </polygon>
+      <rectangle endX="195" startY="60" marked="false" color="-1" endY="105" startX="195" filled="true"></rectangle>
+      <polygon color="255" filled="true" marked="false">
+        <point x="238" y="112"></point>
+        <point x="252" y="141"></point>
+        <point x="219" y="141"></point>
+        <point x="218" y="112"></point>
+      </polygon>
+      <circle x="234" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <rectangle endX="214" startY="185" marked="true" color="-1920102913" endY="194" startX="181" filled="true"></rectangle>
+      <circle x="144" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="false" color="255" diameter="42" filled="true"></circle>
+      <circle x="24" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="144" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+      <circle x="234" y="174" marked="true" color="-1920102913" diameter="42" filled="false"></circle>
+    </shape>
+    <shape name="turtle" rotatable="true" editableColorIndex="0">
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="215" y="204"></point>
+        <point x="240" y="233"></point>
+        <point x="246" y="254"></point>
+        <point x="228" y="266"></point>
+        <point x="215" y="252"></point>
+        <point x="193" y="210"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="195" y="90"></point>
+        <point x="225" y="75"></point>
+        <point x="245" y="75"></point>
+        <point x="260" y="89"></point>
+        <point x="269" y="108"></point>
+        <point x="261" y="124"></point>
+        <point x="240" y="105"></point>
+        <point x="225" y="105"></point>
+        <point x="210" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="105" y="90"></point>
+        <point x="75" y="75"></point>
+        <point x="55" y="75"></point>
+        <point x="40" y="89"></point>
+        <point x="31" y="108"></point>
+        <point x="39" y="124"></point>
+        <point x="60" y="105"></point>
+        <point x="75" y="105"></point>
+        <point x="90" y="105"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="132" y="85"></point>
+        <point x="134" y="64"></point>
+        <point x="107" y="51"></point>
+        <point x="108" y="17"></point>
+        <point x="150" y="2"></point>
+        <point x="192" y="18"></point>
+        <point x="192" y="52"></point>
+        <point x="169" y="65"></point>
+        <point x="172" y="87"></point>
+      </polygon>
+      <polygon color="1504722175" filled="true" marked="false">
+        <point x="85" y="204"></point>
+        <point x="60" y="233"></point>
+        <point x="54" y="254"></point>
+        <point x="72" y="266"></point>
+        <point x="85" y="252"></point>
+        <point x="107" y="210"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="119" y="75"></point>
+        <point x="179" y="75"></point>
+        <point x="209" y="101"></point>
+        <point x="224" y="135"></point>
+        <point x="220" y="225"></point>
+        <point x="175" y="261"></point>
+        <point x="128" y="261"></point>
+        <point x="81" y="224"></point>
+        <point x="74" y="135"></point>
+        <point x="88" y="99"></point>
+      </polygon>
+    </shape>
+    <shape name="wheel" rotatable="false" editableColorIndex="0">
+      <circle x="3" y="3" marked="true" color="-1920102913" diameter="294" filled="true"></circle>
+      <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+      <line endX="150" startY="285" marked="true" color="-1920102913" endY="15" startX="150"></line>
+      <line endX="285" startY="150" marked="true" color="-1920102913" endY="150" startX="15"></line>
+      <circle x="120" y="120" marked="true" color="-1920102913" diameter="60" filled="true"></circle>
+      <line endX="79" startY="40" marked="true" color="-1920102913" endY="269" startX="216"></line>
+      <line endX="269" startY="84" marked="true" color="-1920102913" endY="221" startX="40"></line>
+      <line endX="269" startY="216" marked="true" color="-1920102913" endY="79" startX="40"></line>
+      <line endX="221" startY="40" marked="true" color="-1920102913" endY="269" startX="84"></line>
+    </shape>
+    <shape name="wolf" rotatable="false" editableColorIndex="0">
+      <polygon color="255" filled="true" marked="false">
+        <point x="253" y="133"></point>
+        <point x="245" y="131"></point>
+        <point x="245" y="133"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="2" y="194"></point>
+        <point x="13" y="197"></point>
+        <point x="30" y="191"></point>
+        <point x="38" y="193"></point>
+        <point x="38" y="205"></point>
+        <point x="20" y="226"></point>
+        <point x="20" y="257"></point>
+        <point x="27" y="265"></point>
+        <point x="38" y="266"></point>
+        <point x="40" y="260"></point>
+        <point x="31" y="253"></point>
+        <point x="31" y="230"></point>
+        <point x="60" y="206"></point>
+        <point x="68" y="198"></point>
+        <point x="75" y="209"></point>
+        <point x="66" y="228"></point>
+        <point x="65" y="243"></point>
+        <point x="82" y="261"></point>
+        <point x="84" y="268"></point>
+        <point x="100" y="267"></point>
+        <point x="103" y="261"></point>
+        <point x="77" y="239"></point>
+        <point x="79" y="231"></point>
+        <point x="100" y="207"></point>
+        <point x="98" y="196"></point>
+        <point x="119" y="201"></point>
+        <point x="143" y="202"></point>
+        <point x="160" y="195"></point>
+        <point x="166" y="210"></point>
+        <point x="172" y="213"></point>
+        <point x="173" y="238"></point>
+        <point x="167" y="251"></point>
+        <point x="160" y="248"></point>
+        <point x="154" y="265"></point>
+        <point x="169" y="264"></point>
+        <point x="178" y="247"></point>
+        <point x="186" y="240"></point>
+        <point x="198" y="260"></point>
+        <point x="200" y="271"></point>
+        <point x="217" y="271"></point>
+        <point x="219" y="262"></point>
+        <point x="207" y="258"></point>
+        <point x="195" y="230"></point>
+        <point x="192" y="198"></point>
+        <point x="210" y="184"></point>
+        <point x="227" y="164"></point>
+        <point x="242" y="144"></point>
+        <point x="259" y="145"></point>
+        <point x="284" y="151"></point>
+        <point x="277" y="141"></point>
+        <point x="293" y="140"></point>
+        <point x="299" y="134"></point>
+        <point x="297" y="127"></point>
+        <point x="273" y="119"></point>
+        <point x="270" y="105"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="-1" y="195"></point>
+        <point x="14" y="180"></point>
+        <point x="36" y="166"></point>
+        <point x="40" y="153"></point>
+        <point x="53" y="140"></point>
+        <point x="82" y="131"></point>
+        <point x="134" y="133"></point>
+        <point x="159" y="126"></point>
+        <point x="188" y="115"></point>
+        <point x="227" y="108"></point>
+        <point x="236" y="102"></point>
+        <point x="238" y="98"></point>
+        <point x="268" y="86"></point>
+        <point x="269" y="92"></point>
+        <point x="281" y="87"></point>
+        <point x="269" y="103"></point>
+        <point x="269" y="113"></point>
+      </polygon>
+    </shape>
+    <shape name="x" rotatable="false" editableColorIndex="0">
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="270" y="75"></point>
+        <point x="225" y="30"></point>
+        <point x="30" y="225"></point>
+        <point x="75" y="270"></point>
+      </polygon>
+      <polygon color="-1920102913" filled="true" marked="true">
+        <point x="30" y="75"></point>
+        <point x="75" y="30"></point>
+        <point x="270" y="225"></point>
+        <point x="225" y="270"></point>
+      </polygon>
+    </shape>
+  </turtleShapes>
+  <linkShapes>
+    <shape name="default" curviness="0.0">
+      <lines>
+        <line x="-0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+        <line x="0.0" visible="true">
+          <dash value="1.0"></dash>
+          <dash value="0.0"></dash>
+        </line>
+        <line x="0.2" visible="false">
+          <dash value="0.0"></dash>
+          <dash value="1.0"></dash>
+        </line>
+      </lines>
+      <indicator>
+        <shape name="link direction" rotatable="true" editableColorIndex="0">
+          <line endX="90" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+          <line endX="210" startY="150" marked="true" color="-1920102913" endY="180" startX="150"></line>
+        </shape>
+      </indicator>
+    </shape>
+  </linkShapes>
+  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+  <experiments>
+    <experiment name="Test Experiment 001" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>count turtles</metric>
+        <metric>last-recovery-time</metric>
+        <metric>heading-variance</metric>
+        <metric>ticks</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;none&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E02_mode_contrast_periodic" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>last-recovery-time</metric>
+        <metric>heading-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;periodic&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E003_stress_scaling_response" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="10"></value>
+            <value value="20"></value>
+            <value value="40"></value>
+            <value value="80"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E004a_coupling_x_perturbation" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.2"></value>
+            <value value="0.4"></value>
+            <value value="0.6"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="10"></value>
+            <value value="20"></value>
+            <value value="30"></value>
+            <value value="40"></value>
+            <value value="60"></value>
+            <value value="80"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E004b_identity_pull_x_perturbation" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.1"></value>
+            <value value="0.2"></value>
+            <value value="0.3"></value>
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="20"></value>
+            <value value="30"></value>
+            <value value="40"></value>
+            <value value="60"></value>
+            <value value="80"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E004c_social_pull_x_perturbation" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.25"></value>
+            <value value="0.5"></value>
+            <value value="0.75"></value>
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="20"></value>
+            <value value="30"></value>
+            <value value="40"></value>
+            <value value="60"></value>
+            <value value="80"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E004d_identity_x_social_interaction" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.1"></value>
+            <value value="0.2"></value>
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.25"></value>
+            <value value="0.5"></value>
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="30"></value>
+            <value value="40"></value>
+            <value value="60"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E005a_cost_mode_contrast" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>mean-metabolic-cost</metric>
+        <metric>mean-shock-cost</metric>
+        <metric>mean-recovery-cost</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>cost-variance</metric>
+        <metric>cost-gini</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="10"></value>
+            <value value="20"></value>
+            <value value="40"></value>
+            <value value="80"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="E005b_cost_distribution" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>mean-metabolic-cost</metric>
+        <metric>mean-shock-cost</metric>
+        <metric>mean-recovery-cost</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>cost-variance</metric>
+        <metric>max-agent-cost</metric>
+        <metric>min-agent-cost</metric>
+        <metric>cost-gini</metric>
+        <metric>cost-range-ratio</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;periodic&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="30"></value>
+            <value value="60"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="F001_fatigue_mechanism_validation" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 2000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>mean-metabolic-cost</metric>
+        <metric>mean-shock-cost</metric>
+        <metric>mean-recovery-cost</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>cost-variance</metric>
+        <metric>cost-gini</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>agents-fatigued</metric>
+        <metric>mean-effective-inertia</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="S001a_scale_sensitivity_5000" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 5000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>mean-metabolic-cost</metric>
+        <metric>mean-shock-cost</metric>
+        <metric>mean-recovery-cost</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>cost-variance</metric>
+        <metric>cost-gini</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>agents-fatigued</metric>
+        <metric>mean-effective-inertia</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+            <value value="300"></value>
+            <value value="500"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="S001b_scale_sensitivity_10000" repetitions="1" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 10000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>mean-metabolic-cost</metric>
+        <metric>mean-shock-cost</metric>
+        <metric>mean-recovery-cost</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>cost-variance</metric>
+        <metric>cost-gini</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>agents-fatigued</metric>
+        <metric>mean-effective-inertia</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+            <value value="300"></value>
+            <value value="500"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="S001a_rep_scale_sensitivity_5000" repetitions="5" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 5000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>mean-metabolic-cost</metric>
+        <metric>mean-shock-cost</metric>
+        <metric>mean-recovery-cost</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>cost-variance</metric>
+        <metric>cost-gini</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>agents-fatigued</metric>
+        <metric>mean-effective-inertia</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+            <value value="300"></value>
+            <value value="500"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="S001b_rep_scale_sensitivity_10000" repetitions="5" sequentialRunOrder="true" runMetricsEveryStep="true">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 10000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>baseline</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>mean-metabolic-cost</metric>
+        <metric>mean-shock-cost</metric>
+        <metric>mean-recovery-cost</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>cost-variance</metric>
+        <metric>cost-gini</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>agents-fatigued</metric>
+        <metric>mean-effective-inertia</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+            <value value="300"></value>
+            <value value="500"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="I001_spiral_trigger_investigation" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 5000]]></exitCondition>
+      <metrics>
+        <metric>initial-heading-variance</metric>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="I002_agent_parameter_heterogeneity" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 5000]]></exitCondition>
+      <metrics>
+        <metric>initial-heading-variance</metric>
+        <metric>initial-coupling-bias-mean</metric>
+        <metric>initial-coupling-bias-variance</metric>
+        <metric>initial-inertia-mean</metric>
+        <metric>initial-inertia-variance</metric>
+        <metric>pre-perturbation-cost</metric>
+        <metric>pre-perturbation-variance</metric>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="I003_controlled_variance_sweep" repetitions="30" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 5000]]></exitCondition>
+      <metrics>
+        <metric>initial-heading-variance</metric>
+        <metric>initial-coupling-bias-mean</metric>
+        <metric>initial-coupling-bias-variance</metric>
+        <metric>initial-inertia-mean</metric>
+        <metric>initial-inertia-variance</metric>
+        <metric>pre-perturbation-cost</metric>
+        <metric>pre-perturbation-variance</metric>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>max-fatigue-level</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="target-coupling-bias-variance">
+            <value value="0.02"></value>
+            <value value="0.04"></value>
+            <value value="0.06"></value>
+            <value value="0.08"></value>
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="I004_configuration_tracking" repetitions="50" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 5000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>at-risk-count</metric>
+        <metric>at-risk-fraction</metric>
+        <metric>at-risk-mean-cost</metric>
+        <metric>at-risk-mean-alignment-work</metric>
+        <metric>at-risk-max-fatigue</metric>
+        <metric>at-risk-mean-fatigue</metric>
+        <metric>rest-mean-cost</metric>
+        <metric>rest-mean-alignment-work</metric>
+        <metric>rest-mean-fatigue</metric>
+        <metric>cost-burden-ratio</metric>
+        <metric>alignment-work-ratio</metric>
+        <metric>fatigue-burden-ratio</metric>
+        <metric>mean-initial-distance</metric>
+        <metric>mean-alignment-work</metric>
+        <metric>max-alignment-work</metric>
+        <metric>alignment-work-gini</metric>
+        <metric>initial-coupling-bias-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+            <value value="true"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+  </experiments>
+</model>
