@@ -1,4 +1,4 @@
-# Coherence vs Entrainment Model
+# Entrainment-Coherence ABM
 
 A NetLogo agent-based model exploring the distinction between **coherence** (identity-preserving coordination) and **entrainment** (phase-locking alignment) in dynamical systems.
 
@@ -52,7 +52,7 @@ The model includes pre-configured BehaviorSpace experiments. To run:
 ### Analyzing Results
 
 ```bash
-cd coherence-model
+cd entrainment-coherence-abm
 pip install -r requirements.txt
 jupyter notebook notebooks/behaviorspace_analysis.ipynb
 ```
@@ -60,7 +60,7 @@ jupyter notebook notebooks/behaviorspace_analysis.ipynb
 ## Project Structure
 
 ```
-coherence-model/
+entrainment-coherence-abm/
 ├── netlogo/                    # NetLogo model files
 │   └── coherence_model_simple.nlogox  # Main model
 ├── exports/                    # BehaviorSpace experiment outputs
@@ -144,8 +144,8 @@ This work connects to:
 If you use this model in your research, please cite:
 
 ```
-Mytka, M. M. (2025). Coherence vs Entrainment Model: Agent-based exploration of
-coordination regimes under stress. https://github.com/[your-repo]
+Mytka, M. M. (2025). Entrainment-Coherence ABM: Agent-based exploration of
+coordination regimes under stress. https://github.com/[your-username]/entrainment-coherence-abm
 ```
 
 ## License
