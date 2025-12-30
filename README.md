@@ -145,7 +145,7 @@ If you use this model in your research, please cite:
 
 ```
 Mytka, M. M. (2025). Entrainment-Coherence ABM: Agent-based exploration of
-coordination regimes under stress. https://github.com/[your-username]/entrainment-coherence-abm
+coordination regimes under stress. https://github.com/m3data/entrainment-coherence-abm
 ```
 
 ## License
@@ -162,7 +162,7 @@ This project is released under the [Earthian Stewardship License (ESL-A v0.1)](L
 
 **Mat Mytka** — m3untold@gmail.com
 
-Part of the [EarthianLab](https://github.com/[your-org]) ecosystem.
+Part of the [EarthianLab](https://github.com/m3data) ecosystem.
 
 ---
 
