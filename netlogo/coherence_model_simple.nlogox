@@ -52,6 +52,9 @@ turtles-own [
   ;; Configuration tracking (I004)
   initial-distance-from-mean  ;; angular distance from group mean at setup
   alignment-work              ;; cumulative angular displacement toward social field
+
+  ;; C001: Selective escape valve
+  is-load-bearer?             ;; true if coupling-bias > 0.7 AND initial-distance > 45°
 ]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -108,11 +111,12 @@ to setup
     set initial-distance-from-mean 0  ;; computed after all agents created
   ]
 
-  ;; Compute initial-distance-from-mean (I004)
+  ;; Compute initial-distance-from-mean and classify load-bearers (I004, C001)
   ;; Must happen after all agents exist so we can calculate group mean
   let mean-heading mean-heading-of-turtles
   ask turtles [
     set initial-distance-from-mean abs subtract-headings heading mean-heading
+    set is-load-bearer? (coupling-bias > 0.7 and initial-distance-from-mean > 45)
   ]
 
   ;; Perturbation schedule
@@ -294,8 +298,19 @@ to update-heading
       let identity-pull subtract-headings preferred-heading heading
       let social-pull subtract-headings avg-heading heading
 
+      ;; C001: Selective identity-pull based on agent classification
+      let apply-identity-pull? (
+        selective-identity-pull = "all" or
+        (selective-identity-pull = "load-bearers-only" and is-load-bearer?) or
+        (selective-identity-pull = "non-load-bearers-only" and not is-load-bearer?)
+      )
+
       set social-component (coupling-strength * coupling-bias * social-pull-weight * social-pull)
-      set desired-turn social-component + (identity-pull-weight * identity-pull)
+      ifelse apply-identity-pull? [
+        set desired-turn social-component + (identity-pull-weight * identity-pull)
+      ] [
+        set desired-turn social-component
+      ]
     ]
 
     ;; Mechanism B: Fatigue increases effective inertia (reduces turning capacity)
@@ -684,7 +699,7 @@ end
     <monitor x="1340" precision="2" y="430" height="65" fontSize="13" width="125" display="mean cost">mean-cumulative-cost</monitor>
     <monitor x="1475" precision="2" y="430" height="65" fontSize="13" width="125" display="cost variance">cost-variance</monitor>
     <monitor x="1610" precision="3" y="430" height="65" fontSize="13" width="100" display="cost gini">cost-gini</monitor>
-    <switch x="760" y="25" height="50" on="true" variable="entrainment-mode?" width="275" display="entrainment-mode?"></switch>
+    <switch x="760" y="25" height="50" on="false" variable="entrainment-mode?" width="275" display="entrainment-mode?"></switch>
     <slider x="760" step="0.05" y="565" max="1" width="275" display="fatigue-intensity" height="50" min="0" direction="Horizontal" default="0.5" variable="fatigue-intensity"></slider>
     <slider x="760" step="100" y="505" max="5000" width="275" display="fatigue-saturation" height="50" min="500" direction="Horizontal" default="2000.0" variable="fatigue-saturation"></slider>
     <slider x="760" step="50" y="445" max="2000" width="275" display="fatigue-threshold" height="50" min="0" direction="Horizontal" default="500.0" variable="fatigue-threshold"></slider>
@@ -700,18 +715,23 @@ end
     <slider x="485" step="0.5" y="325" max="60" width="260" display="recovery-tolerance" height="50" min="0" direction="Horizontal" default="5.0" variable="recovery-tolerance" units="degrees"></slider>
     <slider x="485" step="1" y="205" max="180" width="260" display="perturbation-strength" height="50" min="0" direction="Horizontal" default="93.0" variable="perturbation-strength" units="degrees"></slider>
     <slider x="485" step="0.01" y="145" max="1" width="260" display="coupling-strength" height="50" min="0" direction="Horizontal" default="0.4" variable="coupling-strength" units="–"></slider>
-    <slider x="485" step="0.01" y="85" max="1" width="260" display="noise-level" height="50" min="0" direction="Horizontal" default="0.3" variable="noise-level" units="env. variability"></slider>
-    <slider x="485" step="1" y="25" max="1000" width="260" display="population" height="50" min="0" direction="Horizontal" default="100.0" variable="population"></slider>
+    <slider x="485" step="0.01" y="85" max="1" width="260" display="noise-level" height="50" min="0" direction="Horizontal" default="0.35" variable="noise-level" units="env. variability"></slider>
+    <slider x="485" step="1" y="25" max="1000" width="260" display="population" height="50" min="0" direction="Horizontal" default="115.0" variable="population"></slider>
     <button x="20" y="490" height="45" disableUntilTicks="false" forever="false" kind="Observer" width="105" display="setup">setup</button>
     <button x="235" y="490" height="45" disableUntilTicks="false" forever="false" kind="Observer" width="120" display="perturb">perturb</button>
     <button x="135" y="490" height="45" disableUntilTicks="false" forever="true" kind="Observer" width="90" display="go">go</button>
-    <chooser x="20" y="545" height="60" variable="perturbation-regime" current="3" width="335" display="perturbation-regime">
+    <chooser x="20" y="545" height="60" variable="perturbation-regime" current="0" width="335" display="perturbation-regime">
       <choice type="string" value="none"></choice>
       <choice type="string" value="single"></choice>
       <choice type="string" value="periodic"></choice>
       <choice type="string" value="irregular"></choice>
     </chooser>
     <slider x="485" step="0.005" y="505" max="0.1" width="260" display="cost-decay-rate" height="50" min="0" direction="Horizontal" default="0.01" variable="cost-decay-rate"></slider>
+    <chooser x="485" y="565" height="60" variable="selective-identity-pull" current="0" width="260" display="selective-identity-pull">
+      <choice type="string" value="all"></choice>
+      <choice type="string" value="load-bearers-only"></choice>
+      <choice type="string" value="non-load-bearers-only"></choice>
+    </chooser>
     <monitor x="1440" precision="2" y="505" height="60" fontSize="11" width="120" display="eff. inertia">mean-effective-inertia</monitor>
     <monitor x="1310" precision="0" y="505" height="60" fontSize="11" width="120" display="agents fatigued">agents-fatigued</monitor>
     <monitor x="1180" precision="2" y="505" height="60" fontSize="11" width="120" display="max fatigue">max-fatigue-level</monitor>
@@ -3016,6 +3036,164 @@ This model is intended for exploratory, educational, and conceptual research use
           <enumeratedValueSet variable="entrainment-mode?">
             <value value="false"></value>
             <value value="true"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="C001_selective_escape_valve" repetitions="50" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 5000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>at-risk-count</metric>
+        <metric>at-risk-fraction</metric>
+        <metric>at-risk-mean-cost</metric>
+        <metric>at-risk-mean-alignment-work</metric>
+        <metric>at-risk-max-fatigue</metric>
+        <metric>at-risk-mean-fatigue</metric>
+        <metric>rest-mean-cost</metric>
+        <metric>rest-mean-alignment-work</metric>
+        <metric>rest-mean-fatigue</metric>
+        <metric>cost-burden-ratio</metric>
+        <metric>alignment-work-ratio</metric>
+        <metric>fatigue-burden-ratio</metric>
+        <metric>mean-initial-distance</metric>
+        <metric>mean-alignment-work</metric>
+        <metric>max-alignment-work</metric>
+        <metric>alignment-work-gini</metric>
+        <metric>initial-coupling-bias-variance</metric>
+        <metric>heading-variance</metric>
+        <metric>cost-gini</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+            <value value="&quot;load-bearers-only&quot;"></value>
+            <value value="&quot;non-load-bearers-only&quot;"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="150"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="30"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
           </enumeratedValueSet>
         </subExperiment>
       </subExperiments>

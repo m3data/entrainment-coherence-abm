@@ -2,6 +2,8 @@
 
 A NetLogo agent-based model exploring the distinction between **coherence** (identity-preserving coordination) and **entrainment** (phase-locking alignment) in dynamical systems.
 
+![Repo Status](https://img.shields.io/badge/REPO_STATUS-Active_Research-blue?style=for-the-badge&labelColor=8b5e3c&color=e5dac1)
+
 ## The Coherence Theorem
 
 > *In agent-based systems with heterogeneous identity and bounded coupling, regimes that preserve internal diversity will exhibit lower peak disruption and faster recovery under repeated perturbation than regimes optimised for phase alignment.*

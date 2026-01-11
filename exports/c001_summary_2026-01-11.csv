@@ -1,0 +1,5 @@
+Condition,N,Spirals,Spiral Rate,Recovery Mean ± SD,Recovery Median,Max Fatigue Mean ± SD,Max Fatigue Median
+A (load-bearers protected),50,5,10.0%,85 ± 118,52,0.100 ± 0.303,0.000
+B (load-bearers exposed),50,0,0.0%,34 ± 64,8,0.000 ± 0.000,0.000
+C (coherence baseline),50,0,0.0%,12 ± 27,0,0.000 ± 0.000,0.000
+D (entrainment baseline),50,0,0.0%,103 ± 118,80,0.000 ± 0.000,0.000

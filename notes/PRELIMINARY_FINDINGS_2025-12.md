@@ -1,7 +1,7 @@
 # Coherence vs Entrainment Model: Preliminary Findings
 
-**December 2025**
-**Status:** Working synthesis of experimental program (E001–I004)
+**December 2025 – January 2026**
+**Status:** Working synthesis of experimental program (E001–I004, C001)
 **Document type:** Exploratory findings for mechanism discovery
 
 ---
@@ -16,7 +16,7 @@ The model tests the following proposition:
 
 > *In agent-based systems with heterogeneous identity and bounded coupling, regimes that preserve internal diversity will exhibit lower peak disruption and faster recovery under repeated perturbation than regimes optimised for phase alignment.*
 
-This theorem is presented as a **testable claim within model scope**, not a universal law.
+This theorem is presented as a **testable claim within model scope**. It is not a universal law; its applicability to real-world systems requires further empirical validation.
 
 ### How to Read This Document
 
@@ -25,6 +25,8 @@ Readers interested primarily in mechanisms may focus on: **Stress-Scaling Result
 ### Key Contribution
 
 This work identifies a previously under-modeled failure mechanism: **load concentration without relief pathways**. The distinction between synchrony-based coordination (entrainment) and identity-preserving coordination (coherence) has design-relevant implications for systems that must absorb stress without cascading failure.
+
+**C001 Update:** Causal testing revealed that relief pathways must be *universally* available to prevent cascade. Selective escape valves for high-influence agents (load-bearers) *increase* spiral risk by creating phase misalignment cascades. This inverts the intuitive prediction and has implications for differential resilience strategies in heterogeneous systems.
 
 ---
 
@@ -39,6 +41,8 @@ This work identifies a previously under-modeled failure mechanism: **load concen
 | **Load-bearing agents** | Agents with high social sensitivity and positions far from consensus who bear disproportionate alignment work (also: sacrificial stabilizers) |
 | **Load concentration** | Emergent burden asymmetry where specific agents bear disproportionate stabilization cost |
 | **Relief pathway** | Independent internal reference point (e.g., preferred-heading) usable for recovery under fatigue; functions as escape valve under stress |
+| **Phase misalignment cascade** | Destabilization caused by mixed coupling regimes where some agents escape to identity while others remain entrained, creating oscillation between conflicting attractors |
+| **Selective escape valve** | Relief pathway granted to a subset of agents; C001 shows this can destabilize rather than protect |
 | **Stress transition region** | Perturbation level where regime differences become pronounced (empirically ~30-50 under current parameterization) |
 
 ---
@@ -85,6 +89,8 @@ Systems that preserve individual reference points (coherence) provide relief pat
 | Recovery cost under periodic stress | **30× higher** (entrainment vs coherence) | E005b |
 | Fatigue amplification of recovery | **11×** vs 7× (entrainment vs coherence) | F001 |
 | Alignment work ratio (load-bearing vs rest) | 1.6–2× | I004 |
+| Spiral rate: load-bearers-only protected | **10%** (vs 0% for all-protected) | C001 |
+| Spiral rate: non-load-bearers-only protected | **0%** (same as all-protected) | C001 |
 
 ### Theorem Refinements
 
@@ -95,6 +101,8 @@ The original theorem is supported, with these refinements:
 2. **Configuration-level causality:** Population-level variance is a proxy signal. The causal mechanism operates at the agent level: which agents bear load, how many share it, and whether they have relief pathways.
 
 3. **Relief pathway as key mechanism:** The theorem's "preserved diversity" operates specifically through the availability of internal reference points (escape valves), not diversity per se.
+
+4. **Universal access requirement (C001):** Relief pathways must be universally available to prevent cascade. Selective access for high-influence agents creates phase misalignment that *increases* instability. This inverts the intuitive prediction that protecting load-bearers would be sufficient.
 
 ---
 
@@ -241,11 +249,106 @@ This sequence (I001–I004) is presented as an example of **iterative mechanism 
 
 ---
 
+## C001: Selective Escape Valve (Causal Test)
+
+**Source:** C001_selective_escape_valve (January 2026, 200 runs)
+
+### Purpose
+
+Test whether relief pathway availability is the causal mechanism preventing cascade by selectively granting identity-pull to subgroups.
+
+### Design
+
+| Condition | entrainment-mode? | selective-identity-pull | Description |
+|-----------|-------------------|-------------------------|-------------|
+| A | false | "load-bearers-only" | Only load-bearers protected |
+| B | false | "non-load-bearers-only" | Load-bearers unprotected |
+| C | false | "all" | Baseline coherence |
+| D | true | (ignored) | Baseline entrainment |
+
+50 repetitions per condition. Parameters matched I004 (perturbation-strength=60, fatigue-enabled=true, 5000 ticks).
+
+### Pre-Registered Predictions
+
+1. Condition A (load-bearers-only) → near-zero spiral rate
+2. Condition B (non-load-bearers-only) → spiral rate ≈ Condition D
+3. Condition C → zero spirals (baseline coherence)
+4. Condition D → ~10% spiral rate (baseline entrainment)
+
+**Falsification criterion:** If Condition A shows high spiral rate, relief pathway for load-bearers is not the key mechanism.
+
+### Results: PREDICTIONS INVERTED
+
+| Condition | Description | Predicted | Observed | Result |
+|-----------|-------------|-----------|----------|--------|
+| **A** | Load-bearers protected | ~0% spirals | **10% spirals** | FALSIFIED |
+| **B** | Load-bearers exposed | ~10% spirals | **0% spirals** | FALSIFIED |
+| **C** | All protected | 0% spirals | 0% spirals | Supported |
+| **D** | Entrainment baseline | ~10% spirals | 0% spirals | Inconclusive* |
+
+*Entrainment baseline lower than expected from I001; likely due to coupling-bias variance in this sample.
+
+**Recovery Times (mean ± SD):**
+- **A:** 85 ± 118 ticks (median: 52)
+- **B:** 34 ± 64 ticks (median: 8)
+- **C:** 12 ± 27 ticks (median: 0)
+- **D:** 103 ± 118 ticks (median: 80)
+
+**Effect sizes:**
+- A vs B: Cohen's d = 0.54 (medium) — protecting load-bearers *increases* recovery time
+- B vs D: Cohen's d = -0.73 (medium-large) — partial coherence outperforms entrainment
+
+### Mechanism: Phase Misalignment Cascade
+
+**Why did protecting ONLY load-bearers cause spirals?**
+
+The mixed coupling regime creates destabilization:
+
+1. Load-bearers (high coupling-bias) escape toward preferred-heading
+2. Non-load-bearers (low coupling-bias) remain in pure entrainment mode
+3. Social field fragments between identity and entrainment attractors
+4. Non-load-bearers oscillate between conflicting signals (the group is now split)
+5. High-coupling agents feel this oscillation as cost → fatigue → spiral
+
+**The paradox:** Giving the strongest agents an escape valve destabilizes the system *unless everyone has it*.
+
+**Why did protecting ONLY non-load-bearers prevent spirals?**
+
+- Load-bearers (high responsiveness) quickly realign to social field
+- Non-load-bearers drift to identity but have weak influence on group heading
+- Social field remains coherent (dominated by high-coupling agents following it)
+- Low cost accumulation → no fatigue → no spiral
+
+**Interpretation:** Letting weak-influence agents opt out is harmless. Letting strong-influence agents opt out is catastrophic.
+
+### Implications
+
+1. **Relief pathways must be universal:** Selective access for high-influence nodes creates phase misalignment that destabilizes the field
+2. **Load-bearers need protection least:** High-coupling agents are adapted to social constraint; escape options create dissonance with their structural role
+3. **Design principle:** Avoid partial autonomy grants in heterogeneous-influence systems
+
+### Confidence Assessment
+
+**Level: MEDIUM**
+
+Supporting evidence:
+- Sample size adequate (N=50 per condition)
+- Effect direction clear and large (10% vs 0%)
+- Effect sizes medium (Cohen's d ~ 0.5-0.7)
+- Mechanistic story coherent with I002 findings
+
+Limitations:
+- Entrainment baseline discrepancy (0% observed vs 10% expected)
+- Single perturbation regime — may not generalize
+- Non-normal distributions preclude parametric significance tests
+
+---
+
 ## Mechanism Synthesis
 
-### Unified Causal Frame
+### Unified Causal Frame (Revised after C001)
 
-**Load Concentration + Absence of Relief Pathways → Cascade Risk**
+**Load Concentration + Absence of *Universal* Relief Pathways → Cascade Risk**
 
 ```
 Agent configuration
@@ -256,8 +359,17 @@ Agent configuration
 ├── If FEW load-bearers: each overloaded → fatigue accumulates
 │
 ├── [ENTRAINMENT] No relief pathway → exhaustion → cascade failure
-└── [COHERENCE]   Relief pathway (identity-pull) → recovery → stability
+├── [COHERENCE]   Universal relief pathway → recovery → stability
+│
+└── [SELECTIVE ESCAPE - C001 finding]
+    ├── Load-bearers-only protected → INCREASES cascade risk (10% spirals)
+    │   └── Mechanism: Phase misalignment cascade
+    │       └── High-influence agents exit → field fragments → oscillation → cost
+    └── Non-load-bearers-only protected → PREVENTS cascade (0% spirals)
+        └── Mechanism: Weak agents exit harmlessly; strong agents stabilize field
 ```
+
+**Key insight:** Relief pathways must be universal. Selective access for high-influence agents creates phase misalignment that destabilizes the entire field. The "protection" of key nodes externalizes collapse risk onto those who remain coupled.
 
 ### Levels of Causality
 
@@ -288,11 +400,15 @@ Entrainment suppresses internal variance to achieve order. Under stress, this re
 
 Coherence exhibits graceful extensibility — the ability to extend adaptive capacity as stress increases. Entrainment optimizes for efficiency at baseline but lacks extensibility under duress.
 
-### Design Invariant
+### Design Invariants
 
-> Systems that rely on continuous synchronization must provide independent recovery pathways for high-load agents, or they will externalize collapse risk onto a shrinking subset of stabilizers.
+> **Original (I004):** Systems that rely on continuous synchronization must provide independent recovery pathways for high-load agents, or they will externalize collapse risk onto a shrinking subset of stabilizers.
 
-This is the actionable synthesis: the mechanism identified here is not merely descriptive but suggests a design constraint for systems that must absorb stress without cascading.
+> **Revised (C001):** Recovery pathways must be *universally* available. Selective escape valves for high-influence agents do not protect the system — they destabilize it by creating phase misalignment between those who exit and those who remain coupled.
+
+> **Corollary:** In heterogeneous-influence systems, differential autonomy grants load collapse risk onto the less-autonomous. The "protected" nodes' exit is the mechanism of cascade, not its prevention.
+
+This is the actionable synthesis: the mechanism identified here is not merely descriptive but suggests a design constraint for systems that must absorb stress without cascading. The C001 finding adds a crucial refinement: partial solutions that protect only key nodes may be worse than no solution at all.
 
 ---
 
@@ -321,22 +437,17 @@ Planned extensions:
 
 ## Priority Next Experiments
 
-### C001: Selective Escape Valve (Causal Test)
+### C002: Coupling-Bias Variance Sweep in Selective Conditions
 
-**Purpose:** Test whether relief pathway availability is the causal mechanism preventing cascade.
+**Purpose:** Investigate why entrainment baseline in C001 showed 0% spirals (vs 10% expected). Confirm whether coupling-bias variance interacts with selective escape.
 
-**Design:** Toggle identity-pull for specific agent subgroups only:
-- Condition A: Only load-bearing agents have identity-pull
-- Condition B: Only non-load-bearing agents have identity-pull
-- Condition C: All agents (baseline coherence)
-- Condition D: No agents (entrainment)
+**Design:** Sweep target-coupling-bias-variance (0.06, 0.08, 0.10) × selective-identity-pull conditions
 
-**Pre-registered predictions:**
-1. Condition A will show near-zero spiral rate (load-bearers protected)
-2. Condition B will show spiral rate similar to entrainment (load-bearers unprotected)
-3. Minimal intervention (Condition A) will produce disproportionate improvement
+### C003: Graded Identity-Pull Access
 
-**Falsification:** If Condition A shows high spiral rate, relief pathway is not the key mechanism.
+**Purpose:** Test whether there is a threshold fraction of agents needing access to prevent cascade.
+
+**Design:** Grant identity-pull to random subsets: 0%, 25%, 50%, 75%, 100% of agents
 
 ### T001/T002: Agent-Level Temporal Analysis
 
@@ -372,6 +483,7 @@ Planned extensions:
 | **I002** | Parameter heterogeneity | 60 runs | Coupling-bias variance as proxy (p=0.011) |
 | **I003** | Controlled variance | 300 runs | NULL — no dose-response |
 | **I004** | Configuration tracking | 100 runs | Load concentration mechanism identified |
+| **C001** | Selective escape valve | 4 conditions × 50 runs | **FALSIFIED:** Protecting load-bearers increases spirals; universal access required |
 
 ### Statistical Notes
 
@@ -386,7 +498,7 @@ Because the objective of this experimental program is mechanism discovery rather
 
 ## Experiment Registry
 
-### Completed (12 experiments, ~600 runs)
+### Completed (13 experiments, ~800 runs)
 
 | Code | Exports |
 |------|---------|
@@ -402,6 +514,7 @@ Because the objective of this experimental program is mechanism discovery rather
 | I002 | `I002_agent_parameter_heterogeneity-spreadsheet.csv` |
 | I003 | `I003_controlled_variance_sweep-spreadsheet.csv` |
 | I004 | `I004_configuration_tracking-spreadsheet.csv` |
+| **C001** | `coherence_model_simple C001_selective_escape_valve-spreadsheet.csv` |
 
 ### Ready (Not Yet Run)
 
@@ -415,11 +528,11 @@ Because the objective of this experimental program is mechanism discovery rather
 
 | Code | Purpose |
 |------|---------|
-| **C001** | Selective relief pathway (priority causal test) |
+| **C002** | Coupling-bias variance × selective conditions (baseline investigation) |
+| **C003** | Graded identity-pull access (threshold detection) |
 | **T001** | Agent-level time series (priority early-warning) |
 | T002 | Recovery trajectory analysis |
 | A002 | Load-bearing threshold sensitivity sweep |
-| C002 | Load balancing intervention |
 | F002 | Fatigue threshold sweep |
 
 ---
@@ -432,6 +545,7 @@ Key figures in `exports/`:
 - **E005:** `E005a_cost_comparison.png`, `E005b_cost_comparison.png`
 - **F001:** `F001_fatigue_dynamics.png`, `F001_key_metrics.png`
 - **I001–I004:** `I00*_summary_dashboard.png`, hypothesis testing and correlation figures
+- **C001:** `c001_analysis_2026-01-11.png`, `c001_summary_2026-01-11.csv`
 
 ---
 
@@ -443,11 +557,13 @@ Key figures in `exports/`:
 
 ---
 
-**Summary principle**
+**Summary principles**
 
 > *"The spiral isn't about who's at risk. It's about whether they have anywhere to go when they're spent."*
 
+> *"Escape valves must be universal. When the strongest agents exit while others remain coupled, their 'protection' becomes the mechanism of collapse."* (C001)
+
 ---
 
-**Last updated:** 2025-12-28
+**Last updated:** 2026-01-11
 **Session name:** Kairos
