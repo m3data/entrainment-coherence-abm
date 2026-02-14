@@ -2,8 +2,9 @@
 <model version="NetLogo 7.0.3" snapToGrid="true">
   <code><![CDATA[;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; COHERENCE vs ENTRAINMENT MODEL
-;; Illustrative agent-based dynamical sketch
-;; Recovery Tracking v2 + Fatigue Extension v1
+;; TENCON 2026 Fork: Human–AI Agentic Systems
+;; Base: Recovery Tracking v2 + Fatigue v1
+;; Extension: Heterogeneous agent types
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 globals [
@@ -43,6 +44,12 @@ turtles-own [
   inertia              ;; heading update inertia (0–1)
   tie-strength         ;; how influential this turtle is to others (0–1)
 
+  ;; TENCON: Agent type differentiation
+  agent-type           ;; "human" or "ai"
+  update-rate          ;; ticks between heading updates (1 = every tick)
+  influence-radius     ;; perception/connectivity radius
+  noise-multiplier     ;; per-agent noise scaling factor
+
   ;; Cost tracking (v1)
   metabolic-cost       ;; accumulated regulatory cost
   shock-cost           ;; accumulated perturbation cost
@@ -77,6 +84,10 @@ to setup
   set recovery-complete? true
   set last-recovery-time -1  ;; -1 means no recovery measured yet
 
+  ;; Calculate number of AI agents
+  let num-ai round (population * ai-proportion)
+  let num-human population - num-ai
+
   create-turtles population [
     setxy random-xcor random-ycor
     set heading random 360
@@ -84,11 +95,8 @@ to setup
 
     ;; Coupling-bias initialization (I003: controlled variance support)
     ifelse controlled-variance? [
-      ;; For uniform on [a,b], variance = (b-a)²/12
-      ;; For target variance v: half-range = sqrt(3*v)
       let half-range sqrt (3 * target-coupling-bias-variance)
       let raw-value (0.5 - half-range) + random-float (2 * half-range)
-      ;; Clip to [0.01, 0.99] to avoid edge effects
       set coupling-bias max list 0.01 (min list 0.99 raw-value)
     ] [
       set coupling-bias random-float 1
@@ -96,9 +104,6 @@ to setup
 
     set inertia (0.2 + random-float 0.8)
     set tie-strength (0.2 + random-float 0.8)
-    set shape "agent-field"
-    set color scale-color blue coupling-bias 0 1
-    set size 1 + (2 * tie-strength)
 
     ;; Initialize cost tracking
     set metabolic-cost 0
@@ -109,6 +114,33 @@ to setup
     ;; Initialize I004 tracking
     set alignment-work 0
     set initial-distance-from-mean 0  ;; computed after all agents created
+  ]
+
+  ;; TENCON: Assign agent types — first num-ai get type "ai", rest "human"
+  let agent-list sort turtles
+  let idx 0
+  foreach agent-list [ ag ->
+    ask ag [
+      ifelse idx < num-ai [
+        set agent-type "ai"
+        set update-rate 1                          ;; every tick
+        set influence-radius ai-influence-radius
+        set noise-multiplier ai-noise-multiplier
+        set tie-strength tie-strength * ai-tie-strength-multiplier  ;; amplified influence
+        set shape "default"
+        set color scale-color red coupling-bias 0 1  ;; red spectrum for AI
+        set size 1.5 + (2 * tie-strength)
+      ] [
+        set agent-type "human"
+        set update-rate human-update-rate
+        set influence-radius 3                     ;; baseline local perception
+        set noise-multiplier human-noise-multiplier
+        set shape "person"
+        set color scale-color blue coupling-bias 0 1  ;; blue spectrum for human
+        set size 1 + (2 * tie-strength)
+      ]
+    ]
+    set idx idx + 1
   ]
 
   ;; Compute initial-distance-from-mean and classify load-bearers (I004, C001)
@@ -191,10 +223,12 @@ to go
     perturb
   ]
 
-  ;; --- Agent dynamics ---
+  ;; --- Agent dynamics (TENCON: respect per-agent update-rate) ---
   ask turtles [
-    update-heading
-    apply-noise
+    if (ticks mod update-rate) = 0 [
+      update-heading
+      apply-noise
+    ]
     move
   ]
 
@@ -277,7 +311,7 @@ end
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to update-heading
-  let nearby-turtles turtles in-radius 3
+  let nearby-turtles turtles in-radius influence-radius
 
   if any? nearby-turtles [
     let total-weight sum [tie-strength] of nearby-turtles
@@ -330,7 +364,8 @@ to update-heading
 end
 
 to apply-noise
-  set heading heading + (noise-level * (random-float 2 - 1) * 30)
+  ;; TENCON: per-agent noise scaling (AI = lower noise, human = higher)
+  set heading heading + (noise-level * noise-multiplier * (random-float 2 - 1) * 30)
 end
 
 to move
@@ -679,6 +714,117 @@ to-report alignment-work-gini
 
   report (2 * weighted-sum) / (n * total) - (n + 1) / n
 end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; TENCON: TYPE-SPECIFIC REPORTERS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to-report human-agents
+  report turtles with [agent-type = "human"]
+end
+
+to-report ai-agents
+  report turtles with [agent-type = "ai"]
+end
+
+to-report num-humans
+  report count human-agents
+end
+
+to-report num-ais
+  report count ai-agents
+end
+
+to-report human-heading-variance
+  ;; Heading variance among human agents only
+  let humans human-agents
+  if not any? humans [ report 0 ]
+  let mean-h mean [heading] of humans
+  report mean [ abs subtract-headings heading mean-h ] of humans
+end
+
+to-report ai-heading-variance
+  ;; Heading variance among AI agents only
+  let ais ai-agents
+  if not any? ais [ report 0 ]
+  let mean-h mean [heading] of ais
+  report mean [ abs subtract-headings heading mean-h ] of ais
+end
+
+to-report human-mean-cost
+  let humans human-agents
+  if not any? humans [ report 0 ]
+  report mean [cumulative-cost] of humans
+end
+
+to-report ai-mean-cost
+  let ais ai-agents
+  if not any? ais [ report 0 ]
+  report mean [cumulative-cost] of ais
+end
+
+to-report human-ai-cost-ratio
+  ;; Ratio of human cost to AI cost (>1 means humans bear more)
+  let ai-cost ai-mean-cost
+  if ai-cost <= 0 [ report 0 ]
+  report human-mean-cost / ai-cost
+end
+
+to-report human-mean-fatigue
+  let humans human-agents
+  if not any? humans [ report 0 ]
+  report mean [calculate-fatigue-level] of humans
+end
+
+to-report ai-mean-fatigue
+  let ais ai-agents
+  if not any? ais [ report 0 ]
+  report mean [calculate-fatigue-level] of ais
+end
+
+to-report human-max-fatigue
+  let humans human-agents
+  if not any? humans [ report 0 ]
+  report max [calculate-fatigue-level] of humans
+end
+
+to-report ai-max-fatigue
+  let ais ai-agents
+  if not any? ais [ report 0 ]
+  report max [calculate-fatigue-level] of ais
+end
+
+to-report human-mean-alignment-work
+  let humans human-agents
+  if not any? humans [ report 0 ]
+  report mean [alignment-work] of humans
+end
+
+to-report ai-mean-alignment-work
+  let ais ai-agents
+  if not any? ais [ report 0 ]
+  report mean [alignment-work] of ais
+end
+
+to-report human-ai-work-ratio
+  ;; Ratio of human alignment work to AI alignment work
+  let ai-work ai-mean-alignment-work
+  if ai-work <= 0 [ report 0 ]
+  report human-mean-alignment-work / ai-work
+end
+
+to-report diversity-index
+  ;; Behavioral diversity: ratio of population heading variance to maximum possible (180)
+  report heading-variance / 180
+end
+
+to-report human-diversity-index
+  report human-heading-variance / 180
+end
+
+to-report ai-diversity-index
+  report ai-heading-variance / 180
+end
 ]]></code>
   <widgets>
     <view x="20" wrappingAllowedX="true" y="25" frameRate="30.0" minPycor="-16" height="455" showTickCounter="true" patchSize="13.67" fontSize="10" wrappingAllowedY="true" width="455" tickCounterLabel="ticks" maxPycor="16" updateMode="0" maxPxcor="16" minPxcor="-16"></view>
@@ -720,7 +866,7 @@ end
     <button x="20" y="490" height="45" disableUntilTicks="false" forever="false" kind="Observer" width="105" display="setup">setup</button>
     <button x="235" y="490" height="45" disableUntilTicks="false" forever="false" kind="Observer" width="120" display="perturb">perturb</button>
     <button x="135" y="490" height="45" disableUntilTicks="false" forever="true" kind="Observer" width="90" display="go">go</button>
-    <chooser x="20" y="545" height="60" variable="perturbation-regime" current="0" width="335" display="perturbation-regime">
+    <chooser x="20" y="545" height="60" variable="perturbation-regime" current="2" width="335" display="perturbation-regime">
       <choice type="string" value="none"></choice>
       <choice type="string" value="single"></choice>
       <choice type="string" value="periodic"></choice>
@@ -736,14 +882,48 @@ end
     <monitor x="1310" precision="0" y="505" height="60" fontSize="11" width="120" display="agents fatigued">agents-fatigued</monitor>
     <monitor x="1180" precision="2" y="505" height="60" fontSize="11" width="120" display="max fatigue">max-fatigue-level</monitor>
     <monitor x="1050" precision="2" y="505" height="60" fontSize="11" width="120" display="mean fatigue">mean-fatigue-level</monitor>
+    <slider x="20" step="0.05" y="625" max="1" width="215" display="ai-proportion" height="50" min="0" direction="Horizontal" default="0.2" variable="ai-proportion"></slider>
+    <slider x="245" step="1" y="625" max="10" width="215" display="human-update-rate" height="50" min="1" direction="Horizontal" default="5.0" variable="human-update-rate" units="ticks"></slider>
+    <slider x="20" step="1" y="685" max="15" width="215" display="ai-influence-radius" height="50" min="1" direction="Horizontal" default="8.0" variable="ai-influence-radius"></slider>
+    <slider x="245" step="0.1" y="685" max="2" width="215" display="ai-tie-strength-multiplier" height="50" min="0.5" direction="Horizontal" default="1.5" variable="ai-tie-strength-multiplier"></slider>
+    <slider x="20" step="0.1" y="745" max="1" width="215" display="ai-noise-multiplier" height="50" min="0" direction="Horizontal" default="0.3" variable="ai-noise-multiplier"></slider>
+    <slider x="245" step="0.1" y="745" max="3" width="215" display="human-noise-multiplier" height="50" min="0.5" direction="Horizontal" default="1.0" variable="human-noise-multiplier"></slider>
+    <monitor x="1050" precision="0" y="575" height="60" fontSize="11" width="120" display="humans">num-humans</monitor>
+    <monitor x="1180" precision="0" y="575" height="60" fontSize="11" width="120" display="AIs">num-ais</monitor>
+    <monitor x="1310" precision="2" y="575" height="60" fontSize="11" width="120" display="human cost">human-mean-cost</monitor>
+    <monitor x="1440" precision="2" y="575" height="60" fontSize="11" width="120" display="AI cost">ai-mean-cost</monitor>
+    <monitor x="1570" precision="2" y="575" height="60" fontSize="11" width="100" display="H/A cost">human-ai-cost-ratio</monitor>
+    <monitor x="1050" precision="2" y="645" height="60" fontSize="11" width="120" display="human variance">human-heading-variance</monitor>
+    <monitor x="1180" precision="2" y="645" height="60" fontSize="11" width="120" display="AI variance">ai-heading-variance</monitor>
+    <monitor x="1310" precision="2" y="645" height="60" fontSize="11" width="120" display="human fatigue">human-mean-fatigue</monitor>
+    <monitor x="1440" precision="2" y="645" height="60" fontSize="11" width="120" display="AI fatigue">ai-mean-fatigue</monitor>
+    <monitor x="1570" precision="3" y="645" height="60" fontSize="11" width="100" display="diversity">diversity-index</monitor>
   </widgets>
   <info>## WHAT IS IT?
 
-This model explores the difference between *entrainment* and *coherence* in collective systems.
+**TENCON 2026 Fork** — extends the base coherence vs entrainment model with heterogeneous human and AI agent types.
 
-Rather than treating coherence as synchrony or uniformity, the model operationalises coherence as the *capacity of a system to maintain integrity, identity, and relational viability while encountering and reorganising through incoherence and perturbation*.
+This model explores how the introduction of AI agents — with faster update rates, lower noise, larger influence radii, and amplified coordination signals — affects the resilience and adaptive capacity of socio-technical systems.
 
-Using a simple agent-based system of moving agents ("turtles") with heterogeneous traits, the model demonstrates how:
+The central question: *Under what conditions do human–AI agentic systems remain resilient and adaptive, and when do they collapse into brittle entrainment regimes?*
+
+### Key Extension: Agent Type Differentiation
+
+**Human agents** (blue, person shape):
+- Slower update rate (configurable, default every 5 ticks)
+- Higher noise (biological variability)
+- Local influence radius (3 patches)
+- Standard tie-strength
+
+**AI agents** (red, default shape):
+- Fast update rate (every tick)
+- Lower noise (algorithmic precision)
+- Larger influence radius (configurable, default 8 patches)
+- Amplified tie-strength (configurable multiplier)
+
+### Base Model
+
+The base model explores *entrainment* vs *coherence* in collective systems:
 
 - entrainment suppresses variance through phase-locking but can become brittle under perturbation
 - coherence maintains bounded, ongoing variation and absorbs perturbations without collapse
@@ -3194,6 +3374,208 @@ This model is intended for exploratory, educational, and conceptual research use
           </enumeratedValueSet>
           <enumeratedValueSet variable="selective-identity-pull">
             <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="H001_batch1_proportion_sweep_exploratory" repetitions="10" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 3000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>diversity-index</metric>
+        <metric>human-heading-variance</metric>
+        <metric>ai-heading-variance</metric>
+        <metric>human-diversity-index</metric>
+        <metric>ai-diversity-index</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>human-mean-cost</metric>
+        <metric>ai-mean-cost</metric>
+        <metric>human-ai-cost-ratio</metric>
+        <metric>mean-alignment-work</metric>
+        <metric>human-mean-alignment-work</metric>
+        <metric>ai-mean-alignment-work</metric>
+        <metric>human-ai-work-ratio</metric>
+        <metric>cost-gini</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>human-max-fatigue</metric>
+        <metric>ai-max-fatigue</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>human-mean-fatigue</metric>
+        <metric>ai-mean-fatigue</metric>
+        <metric>agents-fatigued</metric>
+        <metric>initial-coupling-bias-variance</metric>
+        <metric>num-humans</metric>
+        <metric>num-ais</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.2"></value>
+            <value value="0.5"></value>
+            <value value="0.9"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="entrainment-mode?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.2"></value>
+            <value value="0.5"></value>
+            <value value="0.9"></value>
           </enumeratedValueSet>
         </subExperiment>
       </subExperiments>
