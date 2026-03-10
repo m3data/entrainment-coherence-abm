@@ -1,6 +1,6 @@
 # Entrainment-Coherence ABM
 
-A NetLogo agent-based model exploring the distinction between **coherence** (identity-preserving coordination) and **entrainment** (phase-locking alignment) in dynamical systems.
+A NetLogo agent-based model that tests whether **coherence** (identity-preserving coordination) outperforms **entrainment** (phase-locking alignment) under perturbation in dynamical systems.
 
 ![Repo Status](https://img.shields.io/badge/REPO_STATUS-Active_Research-blue?style=for-the-badge&labelColor=8b5e3c&color=e5dac1)
 
@@ -65,6 +65,7 @@ jupyter notebook notebooks/behaviorspace_analysis.ipynb
 entrainment-coherence-abm/
 ├── netlogo/                    # NetLogo model files
 │   └── coherence_model_simple.nlogox  # Main model
+├── experiments/                # Individual experiment records (EXP-CM-*.md)
 ├── exports/                    # BehaviorSpace experiment outputs
 ├── notebooks/                  # Python analysis notebooks
 │   ├── behaviorspace_analysis.ipynb   # Primary analysis
@@ -121,7 +122,7 @@ Agent configuration
 
 ## Theoretical Context
 
-This work connects to:
+Three prior frameworks make the mechanism legible:
 
 - **Ashby:** Requisite variety — entrainment suppresses adaptive capacity
 - **Allostasis vs Homeostasis:** Stability through reorganization vs set-point maintenance
