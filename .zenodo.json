@@ -1,0 +1,24 @@
+{
+  "title": "Coherence vs Entrainment in Human-AI Agentic Systems: Agent-Based Model and Experiment Data",
+  "description": "NetLogo agent-based model investigating how AI agent integration affects resilience in coordinated socio-technical systems. Distinguishes entrainment (phase-locking alignment) from coherence (identity-preserving coupling) and tests system behaviour across AI proportions, repeated stress, and mixed-regime populations. Includes BehaviorSpace experiment data (1,500 runs across 3 experiments), analysis scripts, and publication figures.",
+  "creators": [
+    {
+      "name": "Mytka, Mathew",
+      "affiliation": "Faculty of Arts, Society, and Business, University of Wollongong",
+      "orcid": "0000-0003-0890-3540"
+    }
+  ],
+  "keywords": [
+    "agent-based modelling",
+    "human-AI systems",
+    "resilience",
+    "entrainment",
+    "coherence",
+    "socio-technical systems",
+    "coordination dynamics",
+    "NetLogo"
+  ],
+  "license": "MIT",
+  "upload_type": "software",
+  "access_right": "open"
+}
