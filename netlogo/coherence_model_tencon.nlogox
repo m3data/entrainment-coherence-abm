@@ -73,6 +73,9 @@ turtles-own [
 
 to setup
   clear-all
+  ;; Reproducibility: pin RNG to the BehaviorSpace run number so every deposited
+  ;; run regenerates identically. run-number is 0 in interactive/GUI use (unseeded).
+  if behaviorspace-run-number > 0 [ random-seed behaviorspace-run-number ]
   set max-variance 180
   set perturbing? false
   set perturb-timer 0
@@ -4298,6 +4301,779 @@ This model is intended for exploratory, educational, and conceptual research use
             <value value="0.5"></value>
             <value value="0.75"></value>
             <value value="1"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="S-H004_ai_param_robustness" repetitions="100" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 3000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>diversity-index</metric>
+        <metric>human-heading-variance</metric>
+        <metric>ai-heading-variance</metric>
+        <metric>human-diversity-index</metric>
+        <metric>ai-diversity-index</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>human-mean-cost</metric>
+        <metric>ai-mean-cost</metric>
+        <metric>human-ai-cost-ratio</metric>
+        <metric>mean-alignment-work</metric>
+        <metric>human-mean-alignment-work</metric>
+        <metric>ai-mean-alignment-work</metric>
+        <metric>human-ai-work-ratio</metric>
+        <metric>cost-gini</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>human-max-fatigue</metric>
+        <metric>ai-max-fatigue</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>human-mean-fatigue</metric>
+        <metric>ai-mean-fatigue</metric>
+        <metric>agents-fatigued</metric>
+        <metric>initial-coupling-bias-variance</metric>
+        <metric>num-humans</metric>
+        <metric>num-ais</metric>
+        <metric>mean-regime-bias</metric>
+        <metric>human-mean-regime-bias</metric>
+        <metric>ai-mean-regime-bias</metric>
+        <metric>regime-bias-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="2"></value>
+            <value value="3"></value>
+            <value value="5"></value>
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coordination-regime">
+            <value value="&quot;entrainment&quot;"></value>
+            <value value="&quot;coherence&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-regime-bias-mean">
+            <value value="0.8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-regime-bias-mean">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.1"></value>
+            <value value="0.2"></value>
+            <value value="0.5"></value>
+            <value value="0.9"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="5"></value>
+            <value value="8"></value>
+            <value value="11"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coordination-regime">
+            <value value="&quot;entrainment&quot;"></value>
+            <value value="&quot;coherence&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-regime-bias-mean">
+            <value value="0.8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-regime-bias-mean">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.1"></value>
+            <value value="0.2"></value>
+            <value value="0.5"></value>
+            <value value="0.9"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.1"></value>
+            <value value="0.3"></value>
+            <value value="0.5"></value>
+            <value value="1.0"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coordination-regime">
+            <value value="&quot;entrainment&quot;"></value>
+            <value value="&quot;coherence&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-regime-bias-mean">
+            <value value="0.8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-regime-bias-mean">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.1"></value>
+            <value value="0.2"></value>
+            <value value="0.5"></value>
+            <value value="0.9"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;single&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.0"></value>
+            <value value="1.5"></value>
+            <value value="2.0"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coordination-regime">
+            <value value="&quot;entrainment&quot;"></value>
+            <value value="&quot;coherence&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-regime-bias-mean">
+            <value value="0.8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-regime-bias-mean">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.1"></value>
+            <value value="0.2"></value>
+            <value value="0.5"></value>
+            <value value="0.9"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="S-H005_fatigue_robustness" repetitions="100" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 3000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>diversity-index</metric>
+        <metric>human-heading-variance</metric>
+        <metric>ai-heading-variance</metric>
+        <metric>human-diversity-index</metric>
+        <metric>ai-diversity-index</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>human-mean-cost</metric>
+        <metric>ai-mean-cost</metric>
+        <metric>human-ai-cost-ratio</metric>
+        <metric>mean-alignment-work</metric>
+        <metric>human-mean-alignment-work</metric>
+        <metric>ai-mean-alignment-work</metric>
+        <metric>human-ai-work-ratio</metric>
+        <metric>cost-gini</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>human-max-fatigue</metric>
+        <metric>ai-max-fatigue</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>human-mean-fatigue</metric>
+        <metric>ai-mean-fatigue</metric>
+        <metric>agents-fatigued</metric>
+        <metric>initial-coupling-bias-variance</metric>
+        <metric>num-humans</metric>
+        <metric>num-ais</metric>
+        <metric>mean-regime-bias</metric>
+        <metric>human-mean-regime-bias</metric>
+        <metric>ai-mean-regime-bias</metric>
+        <metric>regime-bias-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;periodic&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="300"></value>
+            <value value="500"></value>
+            <value value="800"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coordination-regime">
+            <value value="&quot;mixed&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-regime-bias-mean">
+            <value value="0.8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-regime-bias-mean">
+            <value value="0"></value>
+            <value value="0.25"></value>
+            <value value="0.5"></value>
+            <value value="0.75"></value>
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;periodic&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.3"></value>
+            <value value="0.5"></value>
+            <value value="0.7"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coordination-regime">
+            <value value="&quot;mixed&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-regime-bias-mean">
+            <value value="0.8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-regime-bias-mean">
+            <value value="0"></value>
+            <value value="0.25"></value>
+            <value value="0.5"></value>
+            <value value="0.75"></value>
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+        </subExperiment>
+      </subExperiments>
+    </experiment>
+    <experiment name="S-H006_fine_bias_onset" repetitions="100" sequentialRunOrder="true" runMetricsEveryStep="false">
+      <setup>setup</setup>
+      <go>go</go>
+      <exitCondition><![CDATA[ticks >= 3000]]></exitCondition>
+      <metrics>
+        <metric>recovery-time</metric>
+        <metric>max-deviation</metric>
+        <metric>heading-variance</metric>
+        <metric>diversity-index</metric>
+        <metric>human-heading-variance</metric>
+        <metric>ai-heading-variance</metric>
+        <metric>human-diversity-index</metric>
+        <metric>ai-diversity-index</metric>
+        <metric>mean-cumulative-cost</metric>
+        <metric>human-mean-cost</metric>
+        <metric>ai-mean-cost</metric>
+        <metric>human-ai-cost-ratio</metric>
+        <metric>mean-alignment-work</metric>
+        <metric>human-mean-alignment-work</metric>
+        <metric>ai-mean-alignment-work</metric>
+        <metric>human-ai-work-ratio</metric>
+        <metric>cost-gini</metric>
+        <metric>max-fatigue-level</metric>
+        <metric>human-max-fatigue</metric>
+        <metric>ai-max-fatigue</metric>
+        <metric>mean-fatigue-level</metric>
+        <metric>human-mean-fatigue</metric>
+        <metric>ai-mean-fatigue</metric>
+        <metric>agents-fatigued</metric>
+        <metric>initial-coupling-bias-variance</metric>
+        <metric>num-humans</metric>
+        <metric>num-ais</metric>
+        <metric>mean-regime-bias</metric>
+        <metric>human-mean-regime-bias</metric>
+        <metric>ai-mean-regime-bias</metric>
+        <metric>regime-bias-variance</metric>
+      </metrics>
+      <subExperiments>
+        <subExperiment>
+          <enumeratedValueSet variable="population">
+            <value value="100"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coupling-strength">
+            <value value="0.4"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="noise-level">
+            <value value="0.35"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturb-duration">
+            <value value="144"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-tolerance">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-regime">
+            <value value="&quot;periodic&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="perturbation-strength">
+            <value value="60"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="identity-pull-weight">
+            <value value="0.2"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="social-pull-weight">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="metabolic-rate">
+            <value value="0.1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="shock-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="recovery-rate">
+            <value value="0.05"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-threshold">
+            <value value="500"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-saturation">
+            <value value="2000"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-intensity">
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="cost-decay-rate">
+            <value value="0.01"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="fatigue-enabled?">
+            <value value="true"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="controlled-variance?">
+            <value value="false"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="selective-identity-pull">
+            <value value="&quot;all&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-update-rate">
+            <value value="5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-influence-radius">
+            <value value="8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-tie-strength-multiplier">
+            <value value="1.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-noise-multiplier">
+            <value value="0.3"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-noise-multiplier">
+            <value value="1"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="coordination-regime">
+            <value value="&quot;mixed&quot;"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-regime-bias-mean">
+            <value value="0.8"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="human-regime-bias-mean">
+            <value value="0"></value>
+            <value value="0.05"></value>
+            <value value="0.1"></value>
+            <value value="0.15"></value>
+            <value value="0.2"></value>
+            <value value="0.25"></value>
+            <value value="0.5"></value>
+          </enumeratedValueSet>
+          <enumeratedValueSet variable="ai-proportion">
+            <value value="0"></value>
+            <value value="0.2"></value>
           </enumeratedValueSet>
         </subExperiment>
       </subExperiments>
