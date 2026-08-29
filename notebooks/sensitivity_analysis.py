@@ -175,6 +175,35 @@ def default_cell_check(d4):
                   f"cascade={mid:4.0f}% [{band(lo,hi)}] (n={len(g)})")
 
 
+def minority_peak_check(d4):
+    """Paper §V-E: the submitted version's 'minority-AI peak' (0% vs 10% AI) is tested
+    directly. Fisher exact on the entrainment default cell, and on the human-update-rate=8
+    level (the strongest apparent minority elevation in the sweep)."""
+    from scipy.stats import fisher_exact
+    print("\n" + "=" * 74)
+    print("MINORITY-AI PEAK CHECK (entrainment, 0% vs 10% AI, Fisher exact)")
+    print("=" * 74)
+    ent = d4[d4["coordination-regime"] == "entrainment"]
+    def cell(sub, ap):
+        g = sub[eqmask(sub["ai-proportion"], ap)]
+        return int((g["recovery-time"] == -1).sum()), len(g)
+    # default cell
+    m = pd.Series(True, index=ent.index)
+    for k, v in DEFAULTS.items():
+        m &= eqmask(ent[k], v)
+    cases = [("default cell", ent[m])]
+    # update-rate = 8, other params at default
+    m8 = pd.Series(True, index=ent.index)
+    for k, v in DEFAULTS.items():
+        m8 &= eqmask(ent[k], 8 if k == "human-update-rate" else v)
+    cases.append(("human-update-rate=8", ent[m8]))
+    for label, sub in cases:
+        k0, n0 = cell(sub, 0.0)
+        k1, n1 = cell(sub, 0.1)
+        _, pv = fisher_exact([[k0, n0 - k0], [k1, n1 - k1]])
+        print(f"  {label:22s}: AI=0 {k0}/{n0} ({100*k0/n0:.0f}%)  vs  AI=0.1 {k1}/{n1} ({100*k1/n1:.0f}%)  Fisher p={pv:.2f}")
+
+
 def make_figure(d4, d5, outpath):
     """Fig 2: three panels stacked vertically, sized for one IEEE column (3.5 in wide).
     All text set at >=7 pt so it stays legible at final column width; Wilson 95% CI bands."""
@@ -277,6 +306,7 @@ def main():
     print(f"loaded S-H004 {len(d4)} rows, S-H005 {len(d5)} rows")
     report(d4, d5)
     default_cell_check(d4)
+    minority_peak_check(d4)
     make_figure(d4, d5, args.fig)
 
 

@@ -59,6 +59,14 @@ pip install -r requirements.txt
 jupyter notebook notebooks/behaviorspace_analysis.ipynb
 ```
 
+**Reproducing the TENCON 2026 paper numbers** (every run in `exports/seeded/` is seeded by its run number, so these regenerate identically; no NetLogo needed). Run from the repository root:
+
+```bash
+python notebooks/validate_baseline.py      # gate: 14 anchor values from the seeded deposit
+python notebooks/paper_stats_seeded.py     # every statistic reported in the paper (H001–H003)
+python notebooks/sensitivity_analysis.py   # §V-E robustness sweeps (S-H004/S-H005), Fig. 2, minority-peak Fisher test
+```
+
 ## Project Structure
 
 ```
