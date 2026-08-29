@@ -29,3 +29,6 @@ __pycache__/
 venv/
 env/
 .env
+
+# zetl tool cache
+experiments/.zetl/

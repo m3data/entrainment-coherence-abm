@@ -1,0 +1,11 @@
+[09:43:09] START H001_batch2_proportion_sweep_full
+[09:44:28] DONE  H001_batch2_proportion_sweep_full -> 421 rows
+[09:44:28] START H002_batch3_repeated_stress
+[09:44:56] DONE  H002_batch3_repeated_stress -> 181 rows
+[09:44:56] START H003_batch4_mixed_regime
+[09:47:02] DONE  H003_batch4_mixed_regime -> 901 rows
+[09:47:02] START S-H004_ai_param_robustness
+[10:26:43] DONE  S-H004_ai_param_robustness -> 14001 rows
+[10:26:43] START S-H005_fatigue_robustness
+[10:36:25] DONE  S-H005_fatigue_robustness -> 6001 rows
+[10:36:25] ALL SEEDED RUNS COMPLETE
